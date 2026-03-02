@@ -24,6 +24,6 @@
 [deploy]
   healthcheckPath         = "/api/health"
   healthcheckHttpMethod   = "GET"
-  healthcheckTimeout      = 30
+  healthcheckTimeout      = 120
   restartPolicyType       = "on_failure"
-  restartPolicyMaxRetries = 3
+  restartPolicyMaxRetries = 5

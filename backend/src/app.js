@@ -169,6 +169,13 @@ app.use((req, res, next) => {
 app.use('/static', express.static(path.join(__dirname, '../../frontend/static')));
 
 // ==============================================================================
+// HEALTH CHECK (before all other routes)
+// ==============================================================================
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
+// ==============================================================================
 // ROUTES
 // ==============================================================================
 app.use('/auth', authRouter);
@@ -231,13 +238,21 @@ async function startServer() {
     await ensureAdminUser();
 
     const port = config.port;
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, '0.0.0.0', async () => {
       console.log(`\n${'='.repeat(60)}`);
       console.log(` AI INTELLIGENCE ZONE — Control Arena`);
       console.log(` Server running at http://0.0.0.0:${port}`);
       console.log(` Environment: ${config.isDevelopment ? 'development' : 'production'}`);
       console.log(` Database: ${config.databaseUrl}`);
       console.log(`${'='.repeat(60)}\n`);
+
+      // Run seeders after server is listening so healthcheck passes immediately
+      try {
+        await require('./seed').run();
+        await require('./seed_teams').run();
+      } catch (seedErr) {
+        console.warn('Seeder warning (non-fatal):', seedErr.message);
+      }
     });
   } catch (err) {
     console.error('Failed to start server:', err);

@@ -161,10 +161,17 @@ async function seedTeams() {
 
   } catch (err) {
     console.error('Seeding failed:', err);
-    process.exit(1);
+    if (require.main === module) process.exit(1);
   } finally {
-    await sequelize.close();
+    // Only close the connection when running standalone (not when embedded in app.js)
+    if (require.main === module) await sequelize.close();
   }
 }
 
-seedTeams();
+// Export for use as a module (called from app.js after server starts)
+module.exports = { run: seedTeams };
+
+// Auto-run only when invoked directly: node src/seed_teams.js
+if (require.main === module) {
+  seedTeams();
+}

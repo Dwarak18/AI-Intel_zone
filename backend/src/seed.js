@@ -516,9 +516,15 @@ async function seed() {
   console.log('='.repeat(60) + '\n');
 }
 
-seed()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error('Seed failed:', err);
-    process.exit(1);
-  });
+// Export for use as a module (called from app.js after server starts)
+module.exports = { run: seed };
+
+// Auto-run only when invoked directly: node src/seed.js
+if (require.main === module) {
+  seed()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error('Seed failed:', err);
+      process.exit(1);
+    });
+}
