@@ -24,8 +24,8 @@ COPY --from=deps --chown=arena:arena /app/node_modules ./node_modules
 
 # Copy application source
 COPY --chown=arena:arena backend/src/        ./src/
-COPY --chown=arena:arena frontend/views/     ./views/
-COPY --chown=arena:arena frontend/static/    ./static/
+COPY --chown=arena:arena frontend/views/     ./frontend/views/
+COPY --chown=arena:arena frontend/static/    ./frontend/static/
 COPY --chown=arena:arena backend/package.json ./
 
 # Data directory for optional local SQLite usage
