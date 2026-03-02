@@ -2,6 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "name": "ai-zone-frontend",
+  "buildCommand": "",
+  "outputDirectory": ".",
+  "installCommand": "",
   "rewrites": [
     { "source": "/team-login", "destination": "/team.html" },
     { "source": "/team-login/", "destination": "/team.html" }
