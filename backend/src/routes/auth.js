@@ -181,6 +181,40 @@ router.post('/api/token', async (req, res) => {
 });
 
 // ==============================================================================
+// API: GET CURRENT USER (from Bearer JWT)
+// ==============================================================================
+router.get('/api/me', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  const token = authHeader.split(' ')[1];
+  try {
+    const jwt = require('jsonwebtoken');
+    const payload = jwt.verify(token, config.jwtSecretKey);
+    const user = await User.findByPk(payload.user_id);
+    if (!user || !user.isActive) return res.status(401).json({ error: 'User not found or disabled' });
+
+    // Find team if user is a team member
+    let team = null;
+    if (!user.isAdmin) {
+      const { TeamMember, Team } = require('../models');
+      const membership = await TeamMember.findOne({
+        where: { userId: user.id, isActive: true },
+        include: [{ model: Team, as: 'team' }],
+      });
+      if (membership?.team) {
+        team = { id: membership.team.id, teamCode: membership.team.teamCode, name: membership.team.name, status: membership.team.status };
+      }
+    }
+
+    return res.json({ user: user.toDict(), team });
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+});
+
+// ==============================================================================
 // API: JWT TOKEN VERIFY
 // ==============================================================================
 router.post('/api/token/verify', async (req, res) => {

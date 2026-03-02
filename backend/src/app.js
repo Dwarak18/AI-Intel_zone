@@ -166,7 +166,12 @@ app.use((req, res, next) => {
 // ==============================================================================
 // STATIC FILES
 // ==============================================================================
-app.use('/static', express.static(path.join(__dirname, '../../frontend/static')));
+// React production build (served from /app/public after Docker build)
+const publicDir = path.join(__dirname, '../public');
+if (require('fs').existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
+// (legacy static folder removed — React handles static assets)
 
 // ==============================================================================
 // HEALTH CHECK (before all other routes)
@@ -183,23 +188,38 @@ app.use('/admin', adminRouter);
 app.use('/api', apiRouter);
 app.use('/team', teamRouter);
 
-// Root redirect
-app.get('/', (req, res) => res.redirect('/auth/login'));
+// Root redirect (legacy EJS) — skip if React build exists
+app.get('/', (req, res, next) => {
+  if (require('fs').existsSync(path.join(__dirname, '../public/index.html'))) return next();
+  res.redirect('/auth/login');
+});
+
+// SPA catch-all — serve React index.html for all non-API routes
+app.get('*', (req, res, next) => {
+  const excluded = ['/api', '/auth', '/admin', '/team', '/static'];
+  if (excluded.some(p => req.path.startsWith(p))) return next();
+  const idx = path.join(__dirname, '../public/index.html');
+  if (require('fs').existsSync(idx)) return res.sendFile(idx);
+  return next();
+});
 
 // ==============================================================================
 // ERROR HANDLERS
 // ==============================================================================
-app.use((req, res, next) => {
-  res.status(404).render('errors/404', { layout: false, title: '404 Not Found', path: req.path });
+app.use((req, res) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/admin') || req.path.startsWith('/team')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.status(404).send('<html><body style="background:#020617;color:#e2e8f0;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div><h1 style="color:#6366f1">404</h1><p>Page not found</p><a href="/" style="color:#6366f1">Go home →</a></div></body></html>');
 });
 
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   const status = err.status || 500;
-  if (req.path.startsWith('/api')) {
+  if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/admin') || req.path.startsWith('/team')) {
     return res.status(status).json({ error: err.message || 'Internal server error' });
   }
-  res.status(status).render('errors/500', { layout: false, title: 'Server Error', error: config.isDevelopment ? err : {} });
+  res.status(status).send('<html><body style="background:#020617;color:#e2e8f0;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div><h1 style="color:#ef4444">500</h1><p>Server error</p></div></body></html>');
 });
 
 // ==============================================================================
