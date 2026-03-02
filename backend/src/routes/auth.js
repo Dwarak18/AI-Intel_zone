@@ -261,4 +261,76 @@ router.post('/api/team-token', async (req, res) => {
   });
 });
 
+// ==============================================================================
+// TEAM SESSION LOGIN — accepts team_code + loginPassword, creates a full session
+// Used by the Vercel static frontend (cross-origin form POST)
+// ==============================================================================
+router.post('/team-session', async (req, res) => {
+  const { team_code, password } = req.body || {};
+  if (!team_code || !password) {
+    req.flash('error', 'Team code and password are required.');
+    return res.redirect('/auth/team-login');
+  }
+
+  try {
+    const team = await Team.findOne({ where: { teamCode: team_code.trim().toUpperCase() } });
+    if (!team) {
+      req.flash('error', 'Invalid team code or password.');
+      return res.redirect('/auth/team-login');
+    }
+
+    const loginPassword = team.loginPassword || '';
+    if (!loginPassword || password !== loginPassword) {
+      await AuditLogger.log('team_login_failed', `Bad team-session password for: ${team_code}`, {
+        severity: 'warning', ipAddress: req.ip,
+      });
+      req.flash('error', 'Invalid team code or password.');
+      return res.redirect('/auth/team-login');
+    }
+
+    if (team.status === 'locked') {
+      req.flash('error', 'Team account is locked. Contact an administrator.');
+      return res.redirect('/auth/team-login');
+    }
+    if (team.status === 'disqualified') {
+      req.flash('error', 'This team has been disqualified.');
+      return res.redirect('/auth/team-login');
+    }
+
+    // Find first active team member user to log in as
+    const membership = await TeamMember.findOne({
+      where: { teamId: team.id, isActive: true },
+      include: [{ model: User, as: 'user' }],
+    });
+
+    if (!membership || !membership.user || !membership.user.isActive) {
+      req.flash('error', 'No active user account linked to this team. Contact an administrator.');
+      return res.redirect('/auth/team-login');
+    }
+
+    const user = membership.user;
+    req.login(user, async (err) => {
+      if (err) {
+        req.flash('error', 'Login error. Please try again.');
+        return res.redirect('/auth/team-login');
+      }
+
+      user.lastLogin = new Date();
+      user.lastLoginIp = req.ip;
+      user.loginCount = (user.loginCount || 0) + 1;
+      await user.save();
+
+      await AuditLogger.log('team_login_success', `Team session login: ${team_code}`, {
+        userId: user.id, teamId: team.id, ipAddress: req.ip,
+      });
+
+      return res.redirect('/team/console');
+    });
+  } catch (err) {
+    console.error('team-session error:', err);
+    req.flash('error', 'Server error. Please try again.');
+    return res.redirect('/auth/team-login');
+  }
+});
+
 module.exports = router;

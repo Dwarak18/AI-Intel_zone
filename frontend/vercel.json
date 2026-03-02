@@ -2,7 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "name": "ai-zone-frontend",
-  "redirects": [
-    { "source": "/(.*)", "destination": "https://ai-intelzone-production.up.railway.app/$1", "permanent": false }
+  "routes": [
+    { "src": "/team-login", "dest": "/team.html" },
+    { "src": "/team-login/", "dest": "/team.html" },
+    { "src": "/", "dest": "/index.html" }
   ]
 }

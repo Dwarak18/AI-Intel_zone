@@ -31,6 +31,10 @@ COPY --chown=arena:arena backend/package.json ./
 # Data directory for optional local SQLite usage
 RUN mkdir -p /app/data && chown arena:arena /app/data
 
+# Symlink: app.js resolves path.join(__dirname,'../../frontend') to /frontend
+# (two levels up from /app/src lands at /) so we symlink /frontend → /app/frontend
+RUN ln -s /app/frontend /frontend
+
 USER arena
 
 EXPOSE 5000
