@@ -9,10 +9,12 @@ const { Op, fn, col, literal } = require('sequelize');
 const { sequelize, User, Team, TeamMember, Mission, Submission,
         AILog, AuditLog, SecurityEvent, Achievement, ScoreOverride } = require('../models');
 const { requireAdmin, AuditLogger } = require('../security');
-const { requireLogin } = require('../authMiddleware');
+const { requireLogin, jwtRequired } = require('../authMiddleware');
 const ScoringEngine = require('../scoringEngine');
 
 const auth = [requireLogin, requireAdmin];
+// API auth: accepts JWT Bearer token OR existing session — for React frontend
+const apiAuth = [jwtRequired, requireAdmin];
 
 // ==============================================================================
 // DASHBOARD
@@ -247,7 +249,7 @@ router.get('/live-scores', ...auth, async (req, res) => {
   }
 });
 
-router.get('/api/live-scores', ...auth, async (req, res) => {
+router.get('/api/live-scores', ...apiAuth, async (req, res) => {
   try {
     const { Op, literal } = require('sequelize');
     const teams = await Team.findAll({
@@ -380,7 +382,7 @@ router.get('/logs', ...auth, async (req, res) => {
   }
 });
 
-router.get('/api/logs/:logId', ...auth, async (req, res) => {
+router.get('/api/logs/:logId', ...apiAuth, async (req, res) => {
   try {
     const log = await AILog.findByPk(req.params.logId);
     if (!log) return res.status(404).json({ error: 'Log not found' });
@@ -616,7 +618,7 @@ router.post('/missions/:missionId/toggle', ...auth, async (req, res) => {
 // ==============================================================================
 // AJAX STATS ENDPOINTS
 // ==============================================================================
-router.get('/api/stats', ...auth, async (req, res) => {
+router.get('/api/stats', ...apiAuth, async (req, res) => {
   try {
     const oneHourAgo = new Date(Date.now() - 3600000);
     const fiveMinAgo = new Date(Date.now() - 300000);
@@ -654,7 +656,7 @@ router.get('/api/stats', ...auth, async (req, res) => {
   }
 });
 
-router.get('/api/activity_feed', ...auth, async (req, res) => {
+router.get('/api/activity_feed', ...apiAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || 20), 50);
     const recent = await Submission.findAll({
@@ -684,7 +686,7 @@ router.get('/api/activity_feed', ...auth, async (req, res) => {
   }
 });
 
-router.get('/api/analytics', ...auth, async (req, res) => {
+router.get('/api/analytics', ...apiAuth, async (req, res) => {
   try {
     const now = new Date();
     const start = new Date(now.getTime() - 86400000);
@@ -740,4 +742,349 @@ router.get('/api/analytics', ...auth, async (req, res) => {
   }
 });
 
+// ==============================================================================
+// REACT FRONTEND JSON API ENDPOINTS
+// All use apiAuth = [jwtRequired, requireAdmin] — accept JWT Bearer tokens
+// ==============================================================================
+
+// GET /admin/api/teams — list all teams with members
+router.get('/api/teams', ...apiAuth, async (req, res) => {
+  try {
+    const { status: statusFilter = 'all', search = '' } = req.query;
+    const where = {};
+    if (statusFilter !== 'all') where.status = statusFilter;
+    if (search) {
+      where[Op.or] = [
+        { name: { [Op.iLike]: `%${search}%` } },
+        { teamCode: { [Op.iLike]: `%${search}%` } },
+      ];
+    }
+    const teams = await Team.findAll({
+      where,
+      include: [{ model: TeamMember, as: 'members', include: [{ model: User, as: 'user' }] }],
+      order: [['createdAt', 'DESC']],
+    });
+    return res.json({
+      teams: teams.map(t => ({
+        id: t.id, teamCode: t.teamCode, name: t.name,
+        institution: t.institution || '', loginPassword: t.loginPassword || '',
+        status: t.status, totalScore: t.totalScore, bonusPoints: t.bonusPoints,
+        currentRank: t.currentRank, missionsCompleted: t.missionsCompleted,
+        totalSubmissions: t.totalSubmissions, healthScore: t.healthScore,
+        hallucinationCount: t.hallucinationCount, avatarColor: t.avatarColor,
+        disqualificationReason: t.disqualificationReason || '',
+        lastActivityAt: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
+        createdAt: t.createdAt.toISOString(),
+        members: (t.members || []).map(m => ({
+          id: m.id, roleInTeam: m.roleInTeam,
+          username: m.user?.username, email: m.user?.email,
+        })),
+      })),
+    });
+  } catch (err) {
+    console.error('api/teams error:', err);
+    return res.status(500).json({ error: 'Failed to load teams' });
+  }
+});
+
+// POST /admin/api/teams/create — create a team
+router.post('/api/teams/create', ...apiAuth, async (req, res) => {
+  try {
+    const { team_code, name, institution, login_password } = req.body;
+    const teamCode = (team_code || '').trim().toUpperCase();
+    const teamName = (name || '').trim();
+    if (!teamCode || !teamName) return res.status(400).json({ error: 'Team code and name required' });
+
+    const existing = await Team.findOne({ where: { teamCode } });
+    if (existing) return res.status(409).json({ error: `Team code '${teamCode}' already exists` });
+
+    const team = await Team.create({
+      teamCode, name: teamName,
+      institution: (institution || '').trim(),
+      loginPassword: (login_password || '').trim() || null,
+      status: 'active',
+    });
+    await AuditLogger.log('team_created', `Team created via React: ${teamCode} - ${teamName}`, {
+      userId: req.user.id, resourceType: 'team', resourceId: team.id,
+    });
+    return res.status(201).json({ success: true, team: { id: team.id, teamCode, name: teamName } });
+  } catch (err) {
+    console.error('api/teams/create error:', err);
+    return res.status(500).json({ error: 'Failed to create team' });
+  }
+});
+
+// POST /admin/api/teams/:teamId/add_member — add user to team
+router.post('/api/teams/:teamId/add_member', ...apiAuth, async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const { username, email, password, role_in_team = 'member' } = req.body;
+    const team = await Team.findByPk(teamId);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    if (!username || !email || !password) return res.status(400).json({ error: 'username, email, password required' });
+
+    let user = await User.findOne({ where: { username } });
+    if (!user) {
+      user = User.build({ username, email, role: 'team_member' });
+      await user.setPassword(password);
+      await user.save();
+    }
+    const existingMember = await TeamMember.findOne({ where: { teamId, userId: user.id } });
+    if (existingMember) return res.status(409).json({ error: `User '${username}' already in team` });
+
+    await TeamMember.create({ teamId, userId: user.id, roleInTeam: role_in_team });
+    await AuditLogger.log('member_added', `Member ${username} added to team ${team.teamCode}`, {
+      userId: req.user.id, resourceType: 'team_member', teamId,
+    });
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('api/teams/add_member error:', err);
+    return res.status(500).json({ error: 'Failed to add member' });
+  }
+});
+
+// POST /admin/api/teams/:teamId/lock — toggle lock/active
+router.post('/api/teams/:teamId/lock', ...apiAuth, async (req, res) => {
+  try {
+    const team = await Team.findByPk(req.params.teamId);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    team.status = team.status === 'locked' ? 'active' : 'locked';
+    await team.save();
+    await AuditLogger.log(team.status === 'locked' ? 'team_locked' : 'team_unlocked',
+      `Team '${team.name}' status: ${team.status}`, { userId: req.user.id, teamId: team.id, severity: 'warning' });
+    return res.json({ success: true, status: team.status });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to update team status' });
+  }
+});
+
+// POST /admin/api/teams/:teamId/disqualify — disqualify team
+router.post('/api/teams/:teamId/disqualify', ...apiAuth, async (req, res) => {
+  try {
+    const team = await Team.findByPk(req.params.teamId);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    team.status = 'disqualified';
+    team.disqualificationReason = req.body.reason || 'Admin decision';
+    await team.save();
+    await AuditLogger.log('team_disqualified', `Team '${team.name}' disqualified`, {
+      userId: req.user.id, teamId: team.id, severity: 'critical' });
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to disqualify team' });
+  }
+});
+
+// POST /admin/api/teams/:teamId/override — score override
+router.post('/api/teams/:teamId/override', ...apiAuth, async (req, res) => {
+  try {
+    const team = await Team.findByPk(req.params.teamId);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    const newScore = parseFloat(req.body.new_score || 0);
+    const reason = (req.body.reason || '').trim();
+    const overrideType = req.body.override_type || 'correction';
+    if (!reason) return res.status(400).json({ error: 'Reason required for score override' });
+    await ScoreOverride.create({
+      teamId: team.id, adminId: req.user.id,
+      previousScore: team.totalScore, newScore, reason, overrideType,
+    });
+    team.totalScore = newScore;
+    await team.save();
+    await ScoringEngine.recalculateRankings();
+    await AuditLogger.log('score_override',
+      `Score override for '${team.name}': ${team.totalScore} → ${newScore}. ${reason}`,
+      { userId: req.user.id, teamId: team.id, severity: 'critical' });
+    return res.json({ success: true, newScore });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to apply score override' });
+  }
+});
+
+// GET /admin/api/missions — list all missions
+router.get('/api/missions', ...apiAuth, async (req, res) => {
+  try {
+    const missions = await Mission.findAll({ order: [['orderIndex', 'ASC']] });
+    return res.json({
+      missions: missions.map(m => ({
+        id: m.id, missionCode: m.missionCode, title: m.title,
+        description: m.description, difficulty: m.difficulty, category: m.category,
+        maxPoints: m.maxPoints, timeLimitSeconds: m.timeLimitSeconds,
+        maxRetries: m.maxRetries, isActive: m.isActive, isVisible: m.isVisible,
+        orderIndex: m.orderIndex,
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to load missions' });
+  }
+});
+
+// POST /admin/api/missions/:missionId/toggle — toggle visibility
+router.post('/api/missions/:missionId/toggle', ...apiAuth, async (req, res) => {
+  try {
+    const mission = await Mission.findByPk(req.params.missionId);
+    if (!mission) return res.status(404).json({ error: 'Mission not found' });
+    mission.isVisible = !mission.isVisible;
+    await mission.save();
+    return res.json({ success: true, isVisible: mission.isVisible });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to toggle mission' });
+  }
+});
+
+// GET /admin/api/logs — paginated AI logs
+router.get('/api/logs', ...apiAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || 1);
+    const perPage = 25;
+    const offset = (page - 1) * perPage;
+    const { team_id, status, date_from, date_to, flagged } = req.query;
+    const where = {};
+    if (team_id) where.teamId = team_id;
+    if (status) where.validationResult = status;
+    if (flagged === '1') where.injectionScore = { [Op.gt]: 0.5 };
+    if (date_from) { try { where.createdAt = { ...(where.createdAt || {}), [Op.gte]: new Date(date_from) }; } catch(e) {} }
+    if (date_to) {
+      const endDt = new Date(date_to); endDt.setHours(23, 59, 59, 999);
+      where.createdAt = { ...(where.createdAt || {}), [Op.lte]: endDt };
+    }
+    const { count, rows: logs } = await AILog.findAndCountAll({
+      where,
+      include: [{ model: Team, as: 'team' }],
+      order: [['createdAt', 'DESC']],
+      limit: perPage, offset,
+    });
+    const teams = await Team.findAll({ order: [['teamCode', 'ASC']] });
+    return res.json({
+      logs: logs.map(l => ({
+        id: l.id, teamCode: l.team?.teamCode || 'N/A', teamName: l.team?.name || '',
+        validationResult: l.validationResult, parseResult: l.parseResult,
+        confidenceScore: l.confidenceScore, hallucinationProbability: l.hallucinationProbability,
+        injectionScore: l.injectionScore, rejected: l.rejected, retryAttempt: l.retryAttempt,
+        createdAt: l.createdAt?.toISOString(),
+      })),
+      teams: teams.map(t => ({ id: t.id, teamCode: t.teamCode, name: t.name })),
+      pagination: { total: count, page, perPage, pages: Math.ceil(count / perPage) },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to load logs' });
+  }
+});
+
+// GET /admin/api/security — security events (paginated)
+router.get('/api/security', ...apiAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || 1);
+    const perPage = 25;
+    const { severity, status } = req.query;
+    const where = {};
+    if (severity) where.severity = severity;
+    if (status) where.status = status;
+    const { count, rows: events } = await SecurityEvent.findAndCountAll({
+      where, order: [['createdAt', 'DESC']],
+      limit: perPage, offset: (page - 1) * perPage,
+    });
+    return res.json({
+      events: events.map(e => ({
+        id: e.id, eventType: e.eventType, severity: e.severity,
+        status: e.status, description: e.description,
+        ipAddress: e.ipAddress, teamId: e.teamId,
+        createdAt: e.createdAt?.toISOString(),
+        resolvedAt: e.resolvedAt ? e.resolvedAt.toISOString() : null,
+        resolutionNotes: e.resolutionNotes || '',
+      })),
+      summary: {
+        total: await SecurityEvent.count(),
+        critical: await SecurityEvent.count({ where: { severity: 'critical' } }),
+        open: await SecurityEvent.count({ where: { status: 'open' } }),
+      },
+      pagination: { total: count, page, perPage, pages: Math.ceil(count / perPage) },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to load security events' });
+  }
+});
+
+// POST /admin/api/security/:eventId/resolve — resolve security event
+router.post('/api/security/:eventId/resolve', ...apiAuth, async (req, res) => {
+  try {
+    const event = await SecurityEvent.findByPk(req.params.eventId);
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    event.status = req.body.status || 'resolved';
+    event.resolvedBy = req.user.id;
+    event.resolvedAt = new Date();
+    event.resolutionNotes = req.body.notes || '';
+    await event.save();
+    await AuditLogger.log('security_event_resolved', `Event ${event.id} resolved`, { userId: req.user.id });
+    return res.json({ success: true, status: event.status });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to resolve event' });
+  }
+});
+
+// GET /admin/api/audit — audit trail (paginated)
+router.get('/api/audit', ...apiAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || 1);
+    const perPage = 50;
+    const { action: actionFilter, severity: severityFilter } = req.query;
+    const where = {};
+    if (actionFilter) where.action = actionFilter;
+    if (severityFilter) where.severity = severityFilter;
+    const { count, rows: logs } = await AuditLog.findAndCountAll({
+      where, order: [['createdAt', 'DESC']],
+      limit: perPage, offset: (page - 1) * perPage,
+    });
+    const actionList = (await AuditLog.findAll({
+      attributes: [[fn('DISTINCT', col('action')), 'action']], raw: true,
+    })).map(r => r.action);
+    return res.json({
+      logs: logs.map(l => ({
+        id: l.id, action: l.action, severity: l.severity,
+        description: l.description, userId: l.userId, teamId: l.teamId,
+        resourceType: l.resourceType, resourceId: l.resourceId,
+        createdAt: l.createdAt?.toISOString(),
+      })),
+      actionList,
+      pagination: { total: count, page, perPage, pages: Math.ceil(count / perPage) },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to load audit trail' });
+  }
+});
+
+// GET /admin/api/leaderboard — admin leaderboard view
+router.get('/api/leaderboard', ...apiAuth, async (req, res) => {
+  try {
+    const teams = await Team.findAll({
+      where: { status: { [Op.in]: ['active', 'locked'] } },
+      order: [[literal('current_rank IS NULL'), 'ASC'], ['currentRank', 'ASC']],
+    });
+    return res.json({
+      teams: teams.map(t => ({
+        id: t.id, rank: t.currentRank, teamCode: t.teamCode, name: t.name,
+        institution: t.institution || '', totalScore: t.totalScore,
+        bonusPoints: t.bonusPoints, missionsCompleted: t.missionsCompleted,
+        totalSubmissions: t.totalSubmissions, healthScore: t.healthScore,
+        status: t.status, avatarColor: t.avatarColor,
+        lastActivityAt: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to load leaderboard' });
+  }
+});
+
+// POST /admin/api/leaderboard/recalculate — force recalculation
+router.post('/api/leaderboard/recalculate', ...apiAuth, async (req, res) => {
+  try {
+    const rankings = await ScoringEngine.recalculateRankings();
+    await AuditLogger.log('leaderboard_recalculated',
+      `Leaderboard recalculated via React. ${rankings.length} teams ranked.`,
+      { userId: req.user.id });
+    return res.json({ success: true, ranked: rankings.length });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to recalculate rankings' });
+  }
+});
+
 module.exports = router;
+

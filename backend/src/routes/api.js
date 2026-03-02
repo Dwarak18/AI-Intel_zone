@@ -13,7 +13,7 @@ const { InjectionDetector, AuditLogger } = require('../security');
 const { runMissionValidation } = require('../missionEngine');
 const { jwtRequired } = require('../authMiddleware');
 const config = require('../config');
-const { broadcastLiveScores } = require('../sockets');
+const { broadcastLiveScores, broadcastTeamUpdate } = require('../sockets');
 
 // ==============================================================================
 // HEALTH CHECK
@@ -249,6 +249,7 @@ router.post('/submit', jwtRequired, async (req, res) => {
         limit: 50,
       });
       broadcastLiveScores(rankedTeams.map(t => ({
+        id: t.id,
         rank: t.currentRank,
         teamCode: t.teamCode,
         name: t.name,
@@ -263,6 +264,20 @@ router.post('/submit', jwtRequired, async (req, res) => {
         status: t.status,
         avatarColor: t.avatarColor,
       })));
+
+      // Also send team-specific update for the submitting team
+      try {
+        const updatedTeam = rankedTeams.find(t => t.id === teamId);
+        if (updatedTeam) {
+          broadcastTeamUpdate(teamId, {
+            rank: updatedTeam.currentRank,
+            totalScore: Math.round(updatedTeam.totalScore * 100) / 100,
+            bonusPoints: Math.round(updatedTeam.bonusPoints * 100) / 100,
+            missionsCompleted: updatedTeam.missionsCompleted,
+          });
+        }
+      } catch {}
+
     } catch (broadcastErr) {
       console.warn('Live scores broadcast failed:', broadcastErr.message);
     }

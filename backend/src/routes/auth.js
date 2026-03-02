@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const passport = require('passport');
 const jwt = require('jsonwebtoken');
-const { User, TeamMember } = require('../models');
+const { User, Team, TeamMember } = require('../models');
 const { AuditLogger } = require('../security');
 const { requireLogin, generateToken } = require('../authMiddleware');
 const config = require('../config');
@@ -202,6 +202,63 @@ router.post('/api/token/verify', async (req, res) => {
     }
     return res.status(401).json({ valid: false, error: 'Invalid token' });
   }
+});
+
+// ==============================================================================
+// API: JWT TEAM TOKEN — login with team_code + loginPassword
+// ==============================================================================
+router.post('/api/team-token', async (req, res) => {
+  const { team_code, password } = req.body || {};
+  if (!team_code || !password) {
+    return res.status(400).json({ error: 'team_code and password required' });
+  }
+
+  const team = await Team.findOne({ where: { teamCode: team_code.trim().toUpperCase() } });
+  if (!team) {
+    return res.status(401).json({ error: 'Invalid team code or password' });
+  }
+
+  const loginPassword = team.loginPassword || '';
+  if (!loginPassword || password !== loginPassword) {
+    await AuditLogger.log('team_token_failed', `Failed team token request for: ${team_code}`, {
+      severity: 'warning', ipAddress: req.ip,
+    });
+    return res.status(401).json({ error: 'Invalid team code or password' });
+  }
+
+  if (team.status === 'locked') {
+    return res.status(403).json({ error: 'Team account is locked' });
+  }
+  if (team.status === 'disqualified') {
+    return res.status(403).json({ error: 'Team has been disqualified' });
+  }
+
+  // Find the first active team member's User account to issue a real JWT
+  const membership = await TeamMember.findOne({
+    where: { teamId: team.id },
+    include: [{ model: User, as: 'user' }],
+  });
+
+  if (!membership || !membership.user || !membership.user.isActive) {
+    return res.status(403).json({ error: 'No active user account linked to this team' });
+  }
+
+  const user = membership.user;
+  const token = generateToken(user);
+
+  await AuditLogger.log('team_token_issued', `JWT team token issued for: ${team_code}`, {
+    userId: user.id, teamId: team.id,
+  });
+
+  return res.json({
+    token,
+    expiresIn: config.jwtExpiryHours * 3600,
+    user: user.toDict(),
+    team: {
+      id: team.id, teamCode: team.teamCode, name: team.name,
+      institution: team.institution, status: team.status,
+    },
+  });
 });
 
 module.exports = router;

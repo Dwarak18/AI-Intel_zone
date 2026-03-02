@@ -3,7 +3,33 @@
 // Socket.IO Event Handlers — Real-time admin & team namespaces
 // ==============================================================================
 
+const jwt = require('jsonwebtoken');
+const config = require('./config');
+const { User, TeamMember } = require('./models');
+
 let ioInstance = null;
+
+// Middleware: verify JWT from socket handshake auth
+async function verifySocketToken(socket, next) {
+  const token = socket.handshake.auth?.token;
+  if (token) {
+    try {
+      const payload = jwt.verify(token, config.jwtSecretKey);
+      const user = await User.findByPk(payload.user_id);
+      if (user && user.isActive) {
+        socket._jwtUser = user;
+        return next();
+      }
+    } catch {
+      // Fall through to session check
+    }
+  }
+  // Fallback: session-based auth (EJS portal)
+  if (socket.request.session?.passport?.user) {
+    return next();
+  }
+  next(new Error('Authentication required'));
+}
 
 function initSockets(io) {
   ioInstance = io;
@@ -13,19 +39,18 @@ function initSockets(io) {
   // ==============================================================================
   const adminNs = io.of('/admin');
 
-  adminNs.on('connection', (socket) => {
-    const req = socket.request;
-    const user = req.session?.passport?.user ? req.user : null;
+  adminNs.use(verifySocketToken);
 
-    // Authenticate on connection
-    if (!socket.request.session || !socket.request.session.passport) {
-      console.warn('Unauthorized admin socket connection attempt');
+  adminNs.on('connection', (socket) => {
+    // Verify admin role
+    const user = socket._jwtUser;
+    if (user && !user.isAdmin) {
       socket.disconnect(true);
       return;
     }
 
     socket.join('admin_room');
-    console.log('Admin socket connected:', socket.id);
+    console.log('Admin socket connected (JWT):', socket.id);
     socket.emit('connected', { status: 'ok' });
 
     socket.on('request_stats', () => {
@@ -42,15 +67,23 @@ function initSockets(io) {
   // ==============================================================================
   const teamNs = io.of('/team');
 
-  teamNs.on('connection', (socket) => {
-    if (!socket.request.session || !socket.request.session.passport) {
-      socket.disconnect(true);
-      return;
-    }
+  teamNs.use(verifySocketToken);
 
-    const userId = socket.request.session.passport.user;
-    socket.join(`team_${userId}`);
-    console.log('Team socket connected:', socket.id);
+  teamNs.on('connection', async (socket) => {
+    const user = socket._jwtUser;
+    if (!user) { socket.disconnect(true); return; }
+
+    // Find team membership
+    try {
+      const membership = await TeamMember.findOne({ where: { userId: user.id, isActive: true } });
+      if (membership) {
+        socket.join(`team_${membership.teamId}`);
+        socket._teamId = membership.teamId;
+      }
+    } catch {}
+
+    socket.join(`user_${user.id}`);
+    console.log('Team socket connected (JWT):', socket.id);
     socket.emit('connected', { status: 'ok' });
 
     socket.on('disconnect', () => {
@@ -108,4 +141,14 @@ function broadcastLiveScores(teams) {
   }
 }
 
-module.exports = { initSockets, broadcastLeaderboardUpdate, broadcastSubmissionEvent, broadcastLiveScores };
+function broadcastTeamUpdate(teamId, data) {
+  if (ioInstance) {
+    try {
+      ioInstance.of('/team').to(`team_${teamId}`).emit('score_update', data);
+    } catch (err) {
+      console.error('Broadcast team update error:', err);
+    }
+  }
+}
+
+module.exports = { initSockets, broadcastLeaderboardUpdate, broadcastSubmissionEvent, broadcastLiveScores, broadcastTeamUpdate };
