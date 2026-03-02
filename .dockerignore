@@ -39,6 +39,9 @@ docker-compose*.yml
 *.md
 LICENSE
 
+# Node
+backend/node_modules/
+
 # Logs & temp
 logs/
 *.log

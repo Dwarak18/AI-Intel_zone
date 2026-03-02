@@ -41,12 +41,15 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Node
+backend/node_modules/
+
 # Docker volumes
 postgres-data/
 redis-data/
 
-# SSL certs
-nginx/ssl/
+# Nginx (removed — not needed)
+nginx/
 
 # Coverage
 htmlcov/
@@ -55,3 +58,4 @@ htmlcov/
 
 # Celery
 celerybeat-schedule*
+node_modules

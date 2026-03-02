@@ -1,0 +1,150 @@
+<%# views/admin/live_scores.ejs %>
+
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <h1 class="page-title"><i class="bi bi-broadcast text-danger"></i> Live Scores</h1>
+        <p class="page-subtitle">Real-time team standings &mdash; auto-updates via Socket.IO. <span id="last-updated" class="text-muted small"></span></p>
+    </div>
+    <div class="toolbar d-flex align-items-center gap-2">
+        <span id="ws-badge" class="badge bg-secondary"><i class="bi bi-wifi-off"></i> Connecting…</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="LiveScores.refresh()">
+            <i class="bi bi-arrow-repeat"></i> Refresh
+        </button>
+        <a href="/admin/leaderboard/recalculate" class="btn btn-sm btn-outline-warning"
+           onclick="event.preventDefault(); fetch('/admin/leaderboard/recalculate',{method:'POST'}).then(()=>LiveScores.refresh())">
+            <i class="bi bi-calculator"></i> Recalculate
+        </a>
+    </div>
+</div>
+
+<!-- Stats bar -->
+<div class="row g-2 mb-3" id="live-stats-bar">
+    <div class="col-auto">
+        <span class="badge bg-dark border border-secondary px-3 py-2">
+            <i class="bi bi-people-fill me-1 text-info"></i>
+            <span id="stat-total">0</span> teams
+        </span>
+    </div>
+    <div class="col-auto">
+        <span class="badge bg-dark border border-secondary px-3 py-2">
+            <i class="bi bi-check-circle-fill me-1 text-success"></i>
+            <span id="stat-active">0</span> active
+        </span>
+    </div>
+    <div class="col-auto">
+        <span class="badge bg-dark border border-secondary px-3 py-2">
+            <i class="bi bi-lock-fill me-1 text-warning"></i>
+            <span id="stat-locked">0</span> locked
+        </span>
+    </div>
+    <div class="col-auto">
+        <span class="badge bg-dark border border-secondary px-3 py-2">
+            <i class="bi bi-ban me-1 text-danger"></i>
+            <span id="stat-dq">0</span> disqualified
+        </span>
+    </div>
+</div>
+
+<!-- Live Table -->
+<div class="arena-table">
+    <table class="table table-dark table-hover mb-0" id="live-scores-table">
+        <thead>
+            <tr>
+                <th style="width:60px;">Rank</th>
+                <th>Team Code</th>
+                <th>Team Name</th>
+                <th>
+                    Password
+                    <button class="btn btn-xs btn-link p-0 ms-1 text-muted" id="toggle-passwords" title="Show/hide passwords" onclick="LiveScores.togglePasswords()">
+                        <i class="bi bi-eye-slash" id="pw-eye-icon"></i>
+                    </button>
+                </th>
+                <th>Score</th>
+                <th>Bonus</th>
+                <th>Combined</th>
+                <th>Missions</th>
+                <th>Submissions</th>
+                <th>Valid %</th>
+                <th>Health</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="live-scores-body">
+        <% teams.forEach(function(team, idx) { %>
+        <tr data-team-id="<%= team.id %>" data-status="<%= team.status %>">
+            <td class="text-center fw-bold font-monospace">
+                <% const rank = team.currentRank || (idx + 1); %>
+                <% if (rank === 1) { %><span class="badge bg-warning text-dark">🥇</span>
+                <% } else if (rank === 2) { %><span class="badge bg-secondary">🥈</span>
+                <% } else if (rank === 3) { %><span class="badge bg-danger">🥉</span>
+                <% } else { %>#<%= rank %><% } %>
+            </td>
+            <td>
+                <span class="badge bg-primary font-monospace"><%= team.teamCode %></span>
+            </td>
+            <td>
+                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:<%= team.avatarColor %>;margin-right:6px;"></span>
+                <strong><%= team.name %></strong>
+                <% if (team.institution) { %><span class="text-muted small ms-1"><%= team.institution %></span><% } %>
+            </td>
+            <td>
+                <span class="pw-cell font-monospace small" data-pw="<%= team.loginPassword || '' %>">
+                    <span class="pw-mask text-muted">••••••••</span>
+                    <span class="pw-text d-none"><%= team.loginPassword || '<em class=\'text-muted\'>not set</em>' %></span>
+                </span>
+            </td>
+            <td class="font-monospace text-info fw-bold"><%= (team.totalScore || 0).toFixed(2) %></td>
+            <td class="font-monospace text-success small">+<%= (team.bonusPoints || 0).toFixed(1) %></td>
+            <td class="font-monospace fw-bold" style="color:#a5b4fc;"><%= ((team.totalScore || 0) + (team.bonusPoints || 0)).toFixed(2) %></td>
+            <td><%= team.missionsCompleted || 0 %></td>
+            <td><%= team.totalSubmissions || 0 %></td>
+            <td>
+                <% const vr = team.totalSubmissions > 0 ? Math.round(team.successfulValidations / team.totalSubmissions * 1000) / 10 : 0; %>
+                <div class="d-flex align-items-center gap-1">
+                    <div class="score-bar" style="width:50px;">
+                        <div class="score-bar-fill" style="width:<%= vr %>%"></div>
+                    </div>
+                    <span class="small"><%= vr %>%</span>
+                </div>
+            </td>
+            <td>
+                <% const hs = team.healthScore || 0; %>
+                <div class="score-bar" style="width:50px;">
+                    <div class="score-bar-fill" style="width:<%= hs %>%;background:<%= hs > 70 ? '#22c55e' : hs > 40 ? '#f59e0b' : '#ef4444' %>"></div>
+                </div>
+            </td>
+            <td>
+                <% if (team.status === 'active') { %>
+                    <span class="badge bg-success">Active</span>
+                <% } else if (team.status === 'locked') { %>
+                    <span class="badge bg-warning text-dark">Locked</span>
+                <% } else { %>
+                    <span class="badge bg-danger">DQ</span>
+                <% } %>
+            </td>
+            <td>
+                <div class="d-flex gap-1">
+                    <a href="/admin/teams" class="btn btn-xs btn-outline-secondary" title="Manage team"><i class="bi bi-pencil"></i></a>
+                    <form method="POST" action="/admin/teams/<%= team.id %>/lock" class="d-inline">
+                        <button class="btn btn-xs <%= team.status === 'locked' ? 'btn-outline-success' : 'btn-outline-warning' %>"
+                                title="<%= team.status === 'locked' ? 'Unlock' : 'Lock' %>">
+                            <i class="bi bi-<%= team.status === 'locked' ? 'unlock' : 'lock' %>"></i>
+                        </button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        <% }) %>
+        <% if (teams.length === 0) { %>
+        <tr><td colspan="13" class="text-center text-muted py-5">No teams registered yet.</td></tr>
+        <% } %>
+        </tbody>
+    </table>
+</div>
+
+<style>
+.btn-xs { padding: 2px 7px; font-size: 0.7rem; }
+</style>
+
+<script src="<%= staticUrl %>/static/js/live_scores.js"></script>

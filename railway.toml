@@ -1,0 +1,29 @@
+# ==============================================================================
+# AI INTELLIGENCE ZONE — Control Arena
+# Railway Deployment Configuration
+# ==============================================================================
+# Railway builds the Docker image from repo root using backend/Dockerfile.
+# The Dockerfile copies both backend/ and frontend/ into the image, so all
+# paths resolve correctly inside the container.
+#
+# Required Railway env vars (set in the Railway dashboard):
+#   SECRET_KEY          — random 64-char string
+#   JWT_SECRET_KEY      — random 64-char string
+#   ADMIN_PASSWORD      — strong admin password
+#   NODE_ENV            — production
+#   DATABASE_URL        — sqlite:/app/data/control_arena.db
+#   STATIC_CDN_URL      — https://<your-app>.vercel.app  (after Vercel deploy)
+#
+# Persistent Volume (set in Railway dashboard):
+#   Mount path: /app/data   ← stores the SQLite database file
+# ==============================================================================
+
+[build]
+  dockerfilePath = "backend/Dockerfile"
+
+[deploy]
+  healthcheckPath         = "/api/health"
+  healthcheckHttpMethod   = "GET"
+  healthcheckTimeout      = 30
+  restartPolicyType       = "on_failure"
+  restartPolicyMaxRetries = 3
