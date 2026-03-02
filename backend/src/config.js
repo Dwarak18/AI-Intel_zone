@@ -56,7 +56,7 @@ const config = {
 
   // Admin
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
-  adminPassword: process.env.ADMIN_PASSWORD || 'ControlArena2024!',
+  adminPassword: process.env.ADMIN_PASSWORD || 'heisenberg',
   adminRegistrationCode: process.env.ADMIN_REGISTRATION_CODE || 'ARENA-ADMIN-2026',
 
   // CORS

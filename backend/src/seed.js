@@ -8,7 +8,7 @@ const { sequelize, User, Team, TeamMember, Mission } = require('./models');
 const config = require('./config');
 
 const ADMIN_USERNAME = config.adminUsername || 'admin';
-const ADMIN_PASSWORD = config.adminPassword || 'ControlArena2024!';
+const ADMIN_PASSWORD = config.adminPassword || 'heisenberg';
 
 const MISSIONS = [
   // ─────────────────────────────────────────────────────────────
