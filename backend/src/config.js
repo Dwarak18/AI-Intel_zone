@@ -59,6 +59,10 @@ const config = {
   adminPassword: process.env.ADMIN_PASSWORD || 'heisenberg',
   adminRegistrationCode: process.env.ADMIN_REGISTRATION_CODE || 'ARENA-ADMIN-2026',
 
+  // Environment helpers
+  isDevelopment: (process.env.NODE_ENV || 'development') !== 'production',
+  isProduction: process.env.NODE_ENV === 'production',
+
   // CORS
   corsOrigins: process.env.CORS_ORIGINS || '*',
 

@@ -17,7 +17,8 @@ build/
 venv/
 .venv/
 env/
-
+.env.*  # Ignore all .env files (e.g., .env.local, .env.dev)
+.env.example  # But keep the example .env file
 # Environment & secrets
 .env
 

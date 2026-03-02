@@ -41,6 +41,10 @@ COPY --from=frontend-build --chown=arena:arena /frontend/dist ./public
 COPY --chown=arena:arena backend/src/        ./src/
 COPY --chown=arena:arena backend/package.json ./
 
+# Copy EJS views and legacy static assets (admin portal)
+COPY --chown=arena:arena frontend/views/     ./views/
+COPY --chown=arena:arena frontend/static/    ./static/
+
 # Data directory
 RUN mkdir -p /app/data && chown arena:arena /app/data
 

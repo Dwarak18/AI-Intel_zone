@@ -268,13 +268,30 @@ router.post('/api/team-token', async (req, res) => {
   }
 
   // Find the first active team member's User account to issue a real JWT
-  const membership = await TeamMember.findOne({
+  let membership = await TeamMember.findOne({
     where: { teamId: team.id },
     include: [{ model: User, as: 'user' }],
   });
 
+  // Auto-create a representative user account if none exists for this team
   if (!membership || !membership.user || !membership.user.isActive) {
-    return res.status(403).json({ error: 'No active user account linked to this team' });
+    const safeCode = team.teamCode.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const username = `team_${safeCode}`;
+    const email = `${safeCode}@team.arena.local`;
+
+    let autoUser = await User.findOne({ where: { username } });
+    if (!autoUser) {
+      autoUser = User.build({ username, email, role: 'team_member', isActive: true });
+      await autoUser.setPassword(team.loginPassword || crypto.randomBytes(16).toString('hex'));
+      await autoUser.save();
+    } else if (!autoUser.isActive) {
+      await autoUser.update({ isActive: true });
+    }
+
+    if (!membership) {
+      membership = await TeamMember.create({ teamId: team.id, userId: autoUser.id, roleInTeam: 'lead' });
+    }
+    membership.user = autoUser;
   }
 
   const user = membership.user;
@@ -332,17 +349,31 @@ router.post('/team-session', async (req, res) => {
     }
 
     // Find first active team member user to log in as
-    const membership = await TeamMember.findOne({
-      where: { teamId: team.id, isActive: true },
+    let sessionMembership = await TeamMember.findOne({
+      where: { teamId: team.id },
       include: [{ model: User, as: 'user' }],
     });
 
-    if (!membership || !membership.user || !membership.user.isActive) {
-      req.flash('error', 'No active user account linked to this team. Contact an administrator.');
-      return res.redirect('/auth/team-login');
+    // Auto-create a representative user if none exists
+    if (!sessionMembership || !sessionMembership.user || !sessionMembership.user.isActive) {
+      const safeCode = team.teamCode.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      const username = `team_${safeCode}`;
+      const email = `${safeCode}@team.arena.local`;
+      let autoUser = await User.findOne({ where: { username } });
+      if (!autoUser) {
+        autoUser = User.build({ username, email, role: 'team_member', isActive: true });
+        await autoUser.setPassword(team.loginPassword || crypto.randomBytes(16).toString('hex'));
+        await autoUser.save();
+      } else if (!autoUser.isActive) {
+        await autoUser.update({ isActive: true });
+      }
+      if (!sessionMembership) {
+        sessionMembership = await TeamMember.create({ teamId: team.id, userId: autoUser.id, roleInTeam: 'lead' });
+      }
+      sessionMembership.user = autoUser;
     }
 
-    const user = membership.user;
+    const user = sessionMembership.user;
     req.login(user, async (err) => {
       if (err) {
         req.flash('error', 'Login error. Please try again.');

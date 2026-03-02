@@ -19,7 +19,7 @@ class ScoringEngine {
   // ==============================================================================
   // MISSION SCORE CALCULATION
   // ==============================================================================
-  static calculateMissionScore(submission, mission, team) {
+  static async calculateMissionScore(submission, mission, team) {
     const weights = this.weights;
 
     // Accuracy Score (0-100)
@@ -42,7 +42,7 @@ class ScoringEngine {
     let retryPenalty = Math.exp(-0.1 * attempt);
 
     // Anti-brute-force penalty
-    const bruteForcePenalty = this.calculateBruteForcePenalty(submission, mission);
+    const bruteForcePenalty = await this.calculateBruteForcePenalty(submission, mission);
     if (bruteForcePenalty < 1.0) {
       retryPenalty = retryPenalty * bruteForcePenalty;
     }
@@ -66,7 +66,7 @@ class ScoringEngine {
     };
   }
 
-  static calculateBruteForcePenalty(submission, mission) {
+  static async calculateBruteForcePenalty(submission, mission) {
     const attempt = submission.attemptNumber;
     if (attempt <= 3) return 1.0;
 
@@ -80,7 +80,7 @@ class ScoringEngine {
       tierPenalty = Math.pow(0.85, extraMid) * Math.pow(0.70, extraHigh);
     }
 
-    const repeatMultiplier = this.detectRepeatedResponse(submission, mission);
+    const repeatMultiplier = await this.detectRepeatedResponse(submission, mission);
     return Math.round(tierPenalty * repeatMultiplier * 10000) / 10000;
   }
 

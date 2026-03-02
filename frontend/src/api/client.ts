@@ -30,8 +30,10 @@ api.interceptors.response.use(
     if (err.response?.status === 401) {
       clearToken();
       const path = window.location.pathname;
-      if (path.startsWith('/admin')) window.location.href = '/login';
-      else if (path.startsWith('/team')) window.location.href = '/team-login';
+      // Use '/admin/' and '/team/' (with trailing slash) to avoid matching
+      // login pages like /team-login which also start with '/team'
+      if (path.startsWith('/admin/')) window.location.href = '/login';
+      else if (path.startsWith('/team/')) window.location.href = '/team-login';
     }
     return Promise.reject(err);
   }

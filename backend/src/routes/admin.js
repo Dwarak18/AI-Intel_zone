@@ -12,6 +12,12 @@ const { requireAdmin, AuditLogger } = require('../security');
 const { requireLogin, jwtRequired } = require('../authMiddleware');
 const ScoringEngine = require('../scoringEngine');
 
+// Optional dependencies — fail gracefully if not installed
+let multer = null;
+let ExcelJS = null;
+try { multer = require('multer'); } catch (_) {}
+try { ExcelJS = require('exceljs'); } catch (_) {}
+
 const auth = [requireLogin, requireAdmin];
 // API auth: accepts JWT Bearer token OR existing session — for React frontend
 const apiAuth = [jwtRequired, requireAdmin];
@@ -259,27 +265,29 @@ router.get('/api/live-scores', ...apiAuth, async (req, res) => {
         ['totalScore', 'DESC'],
       ],
     });
+    const scoreList = teams.map(t => ({
+      id: t.id,
+      rank: t.currentRank,
+      teamCode: t.teamCode,
+      name: t.name,
+      institution: t.institution || '',
+      loginPassword: t.loginPassword || '',
+      totalScore: Math.round(t.totalScore * 100) / 100,
+      bonusPoints: Math.round(t.bonusPoints * 100) / 100,
+      combinedScore: Math.round((t.totalScore + t.bonusPoints) * 100) / 100,
+      missionsCompleted: t.missionsCompleted,
+      totalSubmissions: t.totalSubmissions,
+      validationRate: t.totalSubmissions > 0
+        ? Math.round(t.successfulValidations / t.totalSubmissions * 1000) / 10
+        : 0,
+      healthScore: Math.round(t.healthScore * 10) / 10,
+      status: t.status,
+      avatarColor: t.avatarColor,
+      lastActivityAt: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
+    }));
     return res.json({
-      teams: teams.map(t => ({
-        id: t.id,
-        rank: t.currentRank,
-        teamCode: t.teamCode,
-        name: t.name,
-        institution: t.institution || '',
-        loginPassword: t.loginPassword || '',
-        totalScore: Math.round(t.totalScore * 100) / 100,
-        bonusPoints: Math.round(t.bonusPoints * 100) / 100,
-        combinedScore: Math.round((t.totalScore + t.bonusPoints) * 100) / 100,
-        missionsCompleted: t.missionsCompleted,
-        totalSubmissions: t.totalSubmissions,
-        validationRate: t.totalSubmissions > 0
-          ? Math.round(t.successfulValidations / t.totalSubmissions * 1000) / 10
-          : 0,
-        healthScore: Math.round(t.healthScore * 10) / 10,
-        status: t.status,
-        avatarColor: t.avatarColor,
-        lastActivityAt: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
-      })),
+      scores: scoreList,
+      teams: scoreList,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -389,29 +397,48 @@ router.get('/api/logs/:logId', ...apiAuth, async (req, res) => {
 
     const team = await Team.findByPk(log.teamId);
     let missionTitle = null;
+    let missionCode = null;
+    let validationNotes = null;
     if (log.submissionId) {
-      const sub = await Submission.findByPk(log.submissionId, {
-        include: [{ model: Mission, as: 'mission' }],
-      });
-      missionTitle = sub?.mission?.title || null;
+      try {
+        const sub = await Submission.findByPk(log.submissionId, {
+          include: [{ model: Mission, as: 'mission' }],
+        });
+        missionTitle = sub?.mission?.title || null;
+        missionCode = sub?.mission?.missionCode || null;
+        if (sub?.validationErrors) {
+          try { validationNotes = JSON.parse(sub.validationErrors).join('\n'); } catch (_) {}
+        }
+      } catch (_) {}
     }
+
+    const valResult = log.validationResult || '';
+    const statusMapped = valResult === 'pass' ? 'valid' : valResult === 'fail' ? 'invalid' : (valResult || 'error');
+    const isFlagged = log.rejected || (log.injectionScore || 0) > 0.5;
+    const errDetails = (log.errorDetails || '').substring(0, 10000);
 
     return res.json({
       id: log.id,
       teamCode: team?.teamCode || 'N/A',
-      missionTitle,
+      missionCode: missionCode || '',
+      missionTitle: missionTitle || '',
       createdAt: log.createdAt?.toISOString() || null,
       promptText: (log.promptText || '').substring(0, 10000),
+      responseText: (log.aiRawOutput || '').substring(0, 20000),
       aiRawOutput: (log.aiRawOutput || '').substring(0, 20000),
       aiParsedOutput: (log.aiParsedOutput || '').substring(0, 15000),
+      validationNotes: validationNotes || errDetails || null,
       parseResult: log.parseResult,
-      validationResult: log.validationResult,
+      validationResult: valResult,
+      status: statusMapped,
       confidenceScore: log.confidenceScore || 0,
+      hallucinationScore: log.hallucinationProbability || 0,
       hallucinationProbability: log.hallucinationProbability || 0,
       injectionScore: log.injectionScore || 0,
+      flagged: isFlagged,
       rejected: log.rejected,
       rejectionReason: log.rejectionReason,
-      errorDetails: (log.errorDetails || '').substring(0, 10000),
+      errorDetails: errDetails,
       retryAttempt: log.retryAttempt,
       ipAddress: log.ipAddress,
     });
@@ -620,34 +647,37 @@ router.post('/missions/:missionId/toggle', ...auth, async (req, res) => {
 // ==============================================================================
 router.get('/api/stats', ...apiAuth, async (req, res) => {
   try {
-    const oneHourAgo = new Date(Date.now() - 3600000);
-    const fiveMinAgo = new Date(Date.now() - 300000);
+    const [
+      totalTeams, activeTeams, lockedTeams,
+      totalSubmissions, totalSuccessful,
+      openSecurityEvents, flaggedLogs,
+    ] = await Promise.all([
+      Team.count(),
+      Team.count({ where: { status: 'active' } }),
+      Team.count({ where: { status: 'locked' } }),
+      Submission.count(),
+      Submission.count({ where: { validationStatus: 'valid' } }),
+      SecurityEvent.count({ where: { status: 'open' } }),
+      Submission.count({ where: { isFlagged: true } }),
+    ]);
 
-    const activeUsers = await Submission.count({
-      distinct: true,
-      col: 'team_id',
-      where: { createdAt: { [Op.gte]: fiveMinAgo } },
-    });
+    const validationRate = totalSubmissions > 0
+      ? Math.round((totalSuccessful / totalSubmissions) * 1000) / 10 : 0;
+
+    const hallucinationTotal = (await Team.sum('hallucinationCount')) || 0;
+    const hallucinationRate = totalSubmissions > 0
+      ? Math.round((hallucinationTotal / totalSubmissions) * 10000) / 100 : 0;
 
     return res.json({
-      teams: {
-        total: await Team.count(),
-        active: await Team.count({ where: { status: 'active' } }),
-        locked: await Team.count({ where: { status: 'locked' } }),
-        disqualified: await Team.count({ where: { status: 'disqualified' } }),
-      },
-      submissions: {
-        total: await Submission.count(),
-        valid: await Submission.count({ where: { validationStatus: 'valid' } }),
-        invalid: await Submission.count({ where: { validationStatus: 'invalid' } }),
-        error: await Submission.count({ where: { validationStatus: 'error' } }),
-        recentHour: await Submission.count({ where: { createdAt: { [Op.gte]: oneHourAgo } } }),
-      },
-      security: {
-        openEvents: await SecurityEvent.count({ where: { status: 'open' } }),
-        flagged: await Submission.count({ where: { isFlagged: true } }),
-      },
-      activeUsers5m: activeUsers,
+      totalTeams,
+      activeTeams,
+      lockedTeams,
+      totalSubmissions,
+      totalSuccessful,
+      validationRate,
+      openSecurityEvents,
+      flaggedLogs,
+      hallucinationRate,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
@@ -665,10 +695,11 @@ router.get('/api/activity_feed', ...apiAuth, async (req, res) => {
       limit,
     });
 
-    const feed = recent.map(sub => ({
+    const activity = recent.map(sub => ({
       id: sub.id,
       teamCode: sub.team?.teamCode || 'N/A',
       teamName: sub.team?.name || 'Unknown',
+      missionCode: sub.mission?.missionCode || 'N/A',
       mission: sub.mission?.title || 'Unknown Mission',
       status: sub.validationStatus,
       score: Math.round(sub.totalScore * 100) / 100,
@@ -679,7 +710,7 @@ router.get('/api/activity_feed', ...apiAuth, async (req, res) => {
       createdAt: sub.createdAt.toISOString(),
     }));
 
-    return res.json({ feed });
+    return res.json({ activity, feed: activity });
   } catch (err) {
     console.error('api_activity_feed error:', err);
     return res.status(500).json({ error: 'Failed to load activity feed' });
@@ -722,19 +753,37 @@ router.get('/api/analytics', ...apiAuth, async (req, res) => {
       },
     });
 
+    const activeTeamsList = await Team.findAll({
+      where: { status: 'active' },
+      order: [['totalScore', 'DESC']],
+      limit: 20,
+      attributes: ['teamCode', 'name', 'totalScore', 'totalSubmissions'],
+      raw: true,
+    });
+
+    const hourlyData = Object.values(buckets);
+    const hallucinationRate = Math.round((hallucinationTotal / Math.max(subTotal, 1)) * 100 * 100) / 100;
+
     return res.json({
-      hourly: Object.values(buckets),
+      hourlyData,
+      hourly: hourlyData,
       statusCounts: {
         valid: await Submission.count({ where: { validationStatus: 'valid' } }),
         invalid: await Submission.count({ where: { validationStatus: 'invalid' } }),
         error: await Submission.count({ where: { validationStatus: 'error' } }),
       },
       activeTeams15m: activeTeams,
-      hallucinationRate: Math.round((hallucinationTotal / Math.max(subTotal, 1)) * 100 * 100) / 100,
+      hallucinationRate,
       serverLoad: {
         queueDepth: await SecurityEvent.count({ where: { status: 'open' } }),
         eventsOpen: await SecurityEvent.count({ where: { status: 'open' } }),
       },
+      activeTeamsList: activeTeamsList.map(t => ({
+        teamCode: t.teamCode || t.team_code || '',
+        name: t.name || '',
+        totalScore: Math.round((t.totalScore || t.total_score || 0) * 100) / 100,
+        submissionCount: t.totalSubmissions || t.total_submissions || 0,
+      })),
     });
   } catch (err) {
     console.error('api_analytics error:', err);
@@ -755,8 +804,8 @@ router.get('/api/teams', ...apiAuth, async (req, res) => {
     if (statusFilter !== 'all') where.status = statusFilter;
     if (search) {
       where[Op.or] = [
-        { name: { [Op.iLike]: `%${search}%` } },
-        { teamCode: { [Op.iLike]: `%${search}%` } },
+        { name: { [Op.like]: `%${search}%` } },
+        { teamCode: { [Op.like]: `%${search}%` } },
       ];
     }
     const teams = await Team.findAll({
@@ -767,7 +816,9 @@ router.get('/api/teams', ...apiAuth, async (req, res) => {
     return res.json({
       teams: teams.map(t => ({
         id: t.id, teamCode: t.teamCode, name: t.name,
-        institution: t.institution || '', loginPassword: t.loginPassword || '',
+        institution: t.institution || '',
+        loginPassword: t.loginPassword || '',
+        password: t.loginPassword || '',
         status: t.status, totalScore: t.totalScore, bonusPoints: t.bonusPoints,
         currentRank: t.currentRank, missionsCompleted: t.missionsCompleted,
         totalSubmissions: t.totalSubmissions, healthScore: t.healthScore,
@@ -778,6 +829,14 @@ router.get('/api/teams', ...apiAuth, async (req, res) => {
         members: (t.members || []).map(m => ({
           id: m.id, roleInTeam: m.roleInTeam,
           username: m.user?.username, email: m.user?.email,
+          name: m.user?.username || m.user?.email || 'member',
+        })),
+        // TeamsPage expects 'TeamMembers' array with {name}
+        TeamMembers: (t.members || []).map(m => ({
+          id: m.id, roleInTeam: m.roleInTeam,
+          name: m.user?.username || m.user?.email || 'member',
+          email: m.user?.email || '',
+          username: m.user?.username || '',
         })),
       })),
     });
@@ -787,21 +846,25 @@ router.get('/api/teams', ...apiAuth, async (req, res) => {
   }
 });
 
-// POST /admin/api/teams/create — create a team
+// POST /admin/api/teams/create — create a team (accepts camelCase or snake_case)
 router.post('/api/teams/create', ...apiAuth, async (req, res) => {
   try {
-    const { team_code, name, institution, login_password } = req.body;
-    const teamCode = (team_code || '').trim().toUpperCase();
-    const teamName = (name || '').trim();
-    if (!teamCode || !teamName) return res.status(400).json({ error: 'Team code and name required' });
+    // Accept both camelCase (React) and snake_case (legacy)
+    const rawCode = req.body.teamCode || req.body.team_code || '';
+    const teamCode = rawCode.trim().toUpperCase();
+    const teamName = (req.body.name || req.body.teamName || rawCode || '').trim() || teamCode;
+    const loginPassword = (req.body.password || req.body.login_password || '').trim();
+    const institution = (req.body.institution || '').trim();
+
+    if (!teamCode) return res.status(400).json({ error: 'Team code is required' });
 
     const existing = await Team.findOne({ where: { teamCode } });
     if (existing) return res.status(409).json({ error: `Team code '${teamCode}' already exists` });
 
     const team = await Team.create({
       teamCode, name: teamName,
-      institution: (institution || '').trim(),
-      loginPassword: (login_password || '').trim() || null,
+      institution,
+      loginPassword: loginPassword || null,
       status: 'active',
     });
     await AuditLogger.log('team_created', `Team created via React: ${teamCode} - ${teamName}`, {
@@ -939,7 +1002,11 @@ router.get('/api/logs', ...apiAuth, async (req, res) => {
     const { team_id, status, date_from, date_to, flagged } = req.query;
     const where = {};
     if (team_id) where.teamId = team_id;
-    if (status) where.validationResult = status;
+    // status filter maps to validationResult field
+    if (status) {
+      const valMap = { valid: 'pass', invalid: 'fail', error: 'fail' };
+      where.validationResult = valMap[status] || status;
+    }
     if (flagged === '1') where.injectionScore = { [Op.gt]: 0.5 };
     if (date_from) { try { where.createdAt = { ...(where.createdAt || {}), [Op.gte]: new Date(date_from) }; } catch(e) {} }
     if (date_to) {
@@ -952,19 +1019,54 @@ router.get('/api/logs', ...apiAuth, async (req, res) => {
       order: [['createdAt', 'DESC']],
       limit: perPage, offset,
     });
-    const teams = await Team.findAll({ order: [['teamCode', 'ASC']] });
+
+    // Resolve missionCode via submissionId (batch lookup, no N+1)
+    const submissionIds = logs.map(l => l.submissionId).filter(Boolean);
+    let submissionMissionMap = {};
+    if (submissionIds.length > 0) {
+      try {
+        const subs = await Submission.findAll({
+          where: { id: submissionIds },
+          include: [{ model: Mission, as: 'mission', attributes: ['missionCode'] }],
+          attributes: ['id'],
+        });
+        subs.forEach(s => { submissionMissionMap[s.id] = s.mission?.missionCode || ''; });
+      } catch (_) {}
+    }
+
+    const teams = await Team.findAll({ order: [['teamCode', 'ASC']], attributes: ['id', 'teamCode', 'name'] });
+    const totalPages = Math.ceil(count / perPage);
+
     return res.json({
-      logs: logs.map(l => ({
-        id: l.id, teamCode: l.team?.teamCode || 'N/A', teamName: l.team?.name || '',
-        validationResult: l.validationResult, parseResult: l.parseResult,
-        confidenceScore: l.confidenceScore, hallucinationProbability: l.hallucinationProbability,
-        injectionScore: l.injectionScore, rejected: l.rejected, retryAttempt: l.retryAttempt,
-        createdAt: l.createdAt?.toISOString(),
-      })),
+      logs: logs.map(l => {
+        const valResult = l.validationResult || '';
+        const statusMapped = valResult === 'pass' ? 'valid' : valResult === 'fail' ? 'invalid' : (valResult || 'error');
+        const isFlagged = l.rejected || (l.injectionScore || 0) > 0.5;
+        return {
+          id: l.id,
+          teamCode: l.team?.teamCode || 'N/A',
+          teamName: l.team?.name || '',
+          missionCode: submissionMissionMap[l.submissionId] || '',
+          status: statusMapped,
+          validationResult: valResult,
+          parseResult: l.parseResult,
+          confidenceScore: l.confidenceScore || 0,
+          hallucinationScore: l.hallucinationProbability || 0,
+          hallucinationProbability: l.hallucinationProbability || 0,
+          injectionScore: l.injectionScore || 0,
+          flagged: isFlagged,
+          rejected: l.rejected,
+          retryAttempt: l.retryAttempt,
+          promptText: (l.promptText || '').substring(0, 500),
+          createdAt: l.createdAt?.toISOString(),
+        };
+      }),
       teams: teams.map(t => ({ id: t.id, teamCode: t.teamCode, name: t.name })),
-      pagination: { total: count, page, perPage, pages: Math.ceil(count / perPage) },
+      totalPages,
+      pagination: { total: count, page, perPage, pages: totalPages },
     });
   } catch (err) {
+    console.error('api/logs error:', err);
     return res.status(500).json({ error: 'Failed to load logs' });
   }
 });
@@ -982,10 +1084,23 @@ router.get('/api/security', ...apiAuth, async (req, res) => {
       where, order: [['createdAt', 'DESC']],
       limit: perPage, offset: (page - 1) * perPage,
     });
+
+    // Batch-resolve teamCode from teamId
+    const teamIds = [...new Set(events.map(e => e.teamId).filter(Boolean))];
+    let teamCodeMap = {};
+    if (teamIds.length > 0) {
+      try {
+        const tms = await Team.findAll({ where: { id: teamIds }, attributes: ['id', 'teamCode'], raw: true });
+        tms.forEach(t => { teamCodeMap[t.id] = t.teamCode || t.team_code || ''; });
+      } catch (_) {}
+    }
+
+    const totalPages = Math.ceil(count / perPage);
     return res.json({
       events: events.map(e => ({
         id: e.id, eventType: e.eventType, severity: e.severity,
         status: e.status, description: e.description,
+        teamCode: teamCodeMap[e.teamId] || '—',
         ipAddress: e.ipAddress, teamId: e.teamId,
         createdAt: e.createdAt?.toISOString(),
         resolvedAt: e.resolvedAt ? e.resolvedAt.toISOString() : null,
@@ -996,9 +1111,11 @@ router.get('/api/security', ...apiAuth, async (req, res) => {
         critical: await SecurityEvent.count({ where: { severity: 'critical' } }),
         open: await SecurityEvent.count({ where: { status: 'open' } }),
       },
-      pagination: { total: count, page, perPage, pages: Math.ceil(count / perPage) },
+      totalPages,
+      pagination: { total: count, page, perPage, pages: totalPages },
     });
   } catch (err) {
+    console.error('api/security error:', err);
     return res.status(500).json({ error: 'Failed to load security events' });
   }
 });
@@ -1036,17 +1153,34 @@ router.get('/api/audit', ...apiAuth, async (req, res) => {
     const actionList = (await AuditLog.findAll({
       attributes: [[fn('DISTINCT', col('action')), 'action']], raw: true,
     })).map(r => r.action);
+    const totalPages = Math.ceil(count / perPage);
+    const mappedLogs = logs.map(l => ({
+      id: l.id,
+      action: l.action,
+      severity: l.severity,
+      // Fields expected by AuditPage
+      actorId: l.userId || '—',
+      targetType: l.resourceType || '',
+      targetId: l.resourceId || '',
+      details: l.description || '',
+      ipAddress: l.ipAddress || '',
+      // Original fields kept for compat
+      description: l.description,
+      userId: l.userId,
+      teamId: l.teamId,
+      resourceType: l.resourceType,
+      resourceId: l.resourceId,
+      createdAt: l.createdAt?.toISOString(),
+    }));
     return res.json({
-      logs: logs.map(l => ({
-        id: l.id, action: l.action, severity: l.severity,
-        description: l.description, userId: l.userId, teamId: l.teamId,
-        resourceType: l.resourceType, resourceId: l.resourceId,
-        createdAt: l.createdAt?.toISOString(),
-      })),
+      logs: mappedLogs,
+      entries: mappedLogs,
       actionList,
-      pagination: { total: count, page, perPage, pages: Math.ceil(count / perPage) },
+      totalPages,
+      pagination: { total: count, page, perPage, pages: totalPages },
     });
   } catch (err) {
+    console.error('api/audit error:', err);
     return res.status(500).json({ error: 'Failed to load audit trail' });
   }
 });
@@ -1056,19 +1190,35 @@ router.get('/api/leaderboard', ...apiAuth, async (req, res) => {
   try {
     const teams = await Team.findAll({
       where: { status: { [Op.in]: ['active', 'locked'] } },
-      order: [[literal('current_rank IS NULL'), 'ASC'], ['currentRank', 'ASC']],
+      order: [[literal('current_rank IS NULL'), 'ASC'], ['currentRank', 'ASC'], ['totalScore', 'DESC']],
     });
+    const lbList = teams.map((t, idx) => ({
+      id: t.id,
+      rank: t.currentRank || (idx + 1),
+      teamCode: t.teamCode,
+      name: t.name,
+      institution: t.institution || '',
+      totalScore: Math.round((t.totalScore || 0) * 100) / 100,
+      bonusPoints: Math.round((t.bonusPoints || 0) * 100) / 100,
+      missionsCompleted: t.missionsCompleted,
+      // Fields expected by LeaderboardPage
+      submissionCount: t.totalSubmissions,
+      successCount: t.successfulValidations,
+      lastActivity: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
+      // originals
+      totalSubmissions: t.totalSubmissions,
+      successfulValidations: t.successfulValidations,
+      healthScore: Math.round((t.healthScore || 0) * 10) / 10,
+      status: t.status,
+      avatarColor: t.avatarColor,
+      lastActivityAt: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
+    }));
     return res.json({
-      teams: teams.map(t => ({
-        id: t.id, rank: t.currentRank, teamCode: t.teamCode, name: t.name,
-        institution: t.institution || '', totalScore: t.totalScore,
-        bonusPoints: t.bonusPoints, missionsCompleted: t.missionsCompleted,
-        totalSubmissions: t.totalSubmissions, healthScore: t.healthScore,
-        status: t.status, avatarColor: t.avatarColor,
-        lastActivityAt: t.lastActivityAt ? t.lastActivityAt.toISOString() : null,
-      })),
+      leaderboard: lbList,
+      teams: lbList,
     });
   } catch (err) {
+    console.error('api/leaderboard error:', err);
     return res.status(500).json({ error: 'Failed to load leaderboard' });
   }
 });
@@ -1083,6 +1233,185 @@ router.post('/api/leaderboard/recalculate', ...apiAuth, async (req, res) => {
     return res.json({ success: true, ranked: rankings.length });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to recalculate rankings' });
+  }
+});
+
+// ==============================================================================
+// CSV / XLSX BULK TEAM IMPORT
+// POST /admin/api/import-teams
+// Accepts multipart/form-data with 'file' field (CSV or XLSX, max 2MB)
+// Required columns: team_code, team_name, member_name, email
+// ==============================================================================
+const importUpload = multer
+  ? multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 2 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        const allowed = [
+          'text/csv',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/octet-stream',
+        ];
+        if (allowed.includes(file.mimetype) || file.originalname.match(/\.(csv|xlsx|xls)$/i)) {
+          return cb(null, true);
+        }
+        cb(new Error('Only CSV / XLSX files are accepted'));
+      },
+    })
+  : null;
+
+router.post('/api/import-teams', ...apiAuth, async (req, res) => {
+  // Multer middleware inline if available
+  const runUpload = importUpload
+    ? (r, rsp) => new Promise((resolve, reject) => {
+        importUpload.single('file')(r, rsp, (err) => (err ? reject(err) : resolve()));
+      })
+    : null;
+
+  if (!runUpload) {
+    return res.status(503).json({ error: 'File upload support not installed. Run: npm install multer' });
+  }
+  if (!ExcelJS) {
+    return res.status(503).json({ error: 'Excel parsing not installed. Run: npm install exceljs' });
+  }
+
+  try {
+    await runUpload(req, res);
+  } catch (uploadErr) {
+    return res.status(400).json({ error: uploadErr.message || 'File upload failed' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded. Use multipart/form-data with field name "file"' });
+  }
+
+  // Parse the file (CSV or XLSX)
+  let rows;
+  try {
+    const isCsv = /\.csv$/i.test(req.file.originalname) || req.file.mimetype === 'text/csv';
+    if (isCsv) {
+      // Simple CSV parser — handles standard comma-separated data
+      const text = req.file.buffer.toString('utf-8');
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) throw new Error('CSV is empty or has no data rows');
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/["']/g, ''));
+      rows = lines.slice(1).map(line => {
+        const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = values[i] !== undefined ? values[i] : ''; });
+        return obj;
+      });
+    } else {
+      // XLSX via exceljs
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(req.file.buffer);
+      const sheet = workbook.worksheets[0];
+      if (!sheet) throw new Error('Workbook has no sheets');
+      let headers = null;
+      rows = [];
+      sheet.eachRow((row, rowNum) => {
+        const vals = row.values.slice(1); // exceljs index 0 is always undefined
+        if (rowNum === 1) {
+          headers = vals.map(h => String(h || '').trim().toLowerCase());
+        } else {
+          if (!headers) return;
+          const obj = {};
+          headers.forEach((h, i) => { obj[h] = vals[i] !== undefined ? String(vals[i]).trim() : ''; });
+          rows.push(obj);
+        }
+      });
+      if (!rows.length) throw new Error('Sheet is empty');
+    }
+  } catch (parseErr) {
+    return res.status(422).json({ error: 'Failed to parse file: ' + parseErr.message });
+  }
+
+  if (!rows || !rows.length) return res.status(422).json({ error: 'File contains no data rows' });
+
+  // Validate headers
+  const firstRow = rows[0];
+  const requiredCols = ['team_code', 'team_name'];
+  const missing = requiredCols.filter(c => !(c in firstRow));
+  if (missing.length) {
+    return res.status(422).json({
+      error: `Missing required columns: ${missing.join(', ')}`,
+      hint: 'Required columns: team_code, team_name, member_name (optional), email (optional)',
+    });
+  }
+
+  const summary = { created_teams: 0, created_members: 0, skipped_rows: 0, errors: [] };
+  const t = await sequelize.transaction();
+
+  try {
+    for (const [idx, row] of rows.entries()) {
+      const teamCode = String(row.team_code || '').trim().toUpperCase();
+      const teamName = String(row.team_name || '').trim();
+      const memberName = String(row.member_name || row.name || '').trim();
+      const email = String(row.email || '').trim();
+      const password = String(row.password || row.login_password || '').trim();
+
+      if (!teamCode || !teamName) {
+        summary.skipped_rows++;
+        summary.errors.push(`Row ${idx + 2}: Missing team_code or team_name`);
+        continue;
+      }
+
+      // Upsert team
+      let [team, teamCreated] = await Team.findOrCreate({
+        where: { teamCode },
+        defaults: {
+          teamCode, name: teamName,
+          institution: String(row.institution || '').trim(),
+          loginPassword: password || null,
+          status: 'active',
+        },
+        transaction: t,
+      });
+
+      if (teamCreated) {
+        summary.created_teams++;
+      }
+
+      // Create member if email and memberName provided
+      if (email && memberName) {
+        const username = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') + '_' + teamCode.toLowerCase();
+        const existingUser = await User.findOne({ where: { email }, transaction: t });
+
+        let user = existingUser;
+        if (!user) {
+          user = User.build({ username, email, role: 'team_member' });
+          await user.setPassword(password || 'changeme123');
+          await user.save({ transaction: t });
+        }
+
+        const existingMember = await TeamMember.findOne({
+          where: { teamId: team.id, userId: user.id },
+          transaction: t,
+        });
+
+        if (!existingMember) {
+          await TeamMember.create({ teamId: team.id, userId: user.id, roleInTeam: 'member' }, { transaction: t });
+          summary.created_members++;
+        }
+      }
+    }
+
+    await t.commit();
+
+    await AuditLogger.log('bulk_import', `Bulk import: ${summary.created_teams} teams, ${summary.created_members} members, ${summary.skipped_rows} skipped`, {
+      userId: req.user?.id, severity: 'warning',
+    });
+
+    return res.json({
+      success: true,
+      summary,
+      message: `Import complete: ${summary.created_teams} teams created, ${summary.created_members} members added, ${summary.skipped_rows} rows skipped`,
+    });
+  } catch (importErr) {
+    await t.rollback();
+    console.error('import-teams error:', importErr);
+    return res.status(500).json({ error: 'Import failed: ' + importErr.message });
   }
 });
 

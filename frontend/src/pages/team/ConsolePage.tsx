@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import TeamLayout from '../../components/TeamLayout';
-import { teamApi, adminApi } from '../../api/client';
+import { teamApi } from '../../api/client';
 
 interface Mission {
   id: number; missionCode: string; title: string; difficulty: string;
@@ -14,7 +14,7 @@ interface SubmitResult {
   confidence?: number; hallucinationScore?: number;
   validationNotes?: string; attemptsUsed?: number;
 }
-interface HistoryEntry { id: number; status: string; score: number; createdAt: string; promptText: string; }
+interface HistoryEntry { id: number; validationStatus: string; scoreAwarded: number; createdAt: string; attemptNumber: number; }
 
 export default function ConsolePage() {
   const { user, team } = useAuth();
@@ -36,13 +36,13 @@ export default function ConsolePage() {
     (async () => {
       try { const r = await teamApi.missions(); setMissions(r.data.missions || []); }
       finally { setLoadingMissions(false); }
-      try { const lr = await adminApi.liveScores(); setLeaderboard(lr.data.scores || []); } catch {}
+      try { const lr = await teamApi.leaderboard(); setLeaderboard(lr.data.leaderboard || []); } catch {}
     })();
   }, []);
 
   const selectMission = async (m: Mission) => {
     setSelected(m); setResult(null); setPrompt(''); setResponse(''); setJsonError(''); setTab('brief');
-    try { const r = await teamApi.missionHistory(m.id); setHistory(r.data.history || []); } catch {}
+    try { const r = await teamApi.missionHistory(m.id); setHistory(r.data.submissions || []); } catch {}
   };
 
   const validateJson = (val: string) => {
@@ -56,17 +56,27 @@ export default function ConsolePage() {
     if (selected.outputFormatHint?.includes('json') && !validateJson(response)) return;
     setSubmitting(true); setResult(null);
     try {
-      const r = await teamApi.submit({ missionId: selected.id, promptText: prompt, responseText: response });
-      setResult(r.data);
-      // refresh attempts
-      const mr = await teamApi.missions();
-      const updated = (mr.data.missions || []).find((m: Mission) => m.id === selected.id);
-      if (updated) setSelected(updated);
+      const r = await teamApi.submit({
+        mission_id: selected.id,
+        prompt_text: prompt,
+        ai_response: response,
+      });
+      const d = r.data;
+      setResult({
+        status: d.status || d.validation?.status || 'error',
+        score: d.score?.total ?? 0,
+        message: d.validation?.feedback || d.message || '',
+        confidence: d.score?.confidence,
+        hallucinationScore: undefined,
+        validationNotes: d.validation?.errors?.join('; ') || undefined,
+        attemptsUsed: d.attemptNumber,
+      });
+      // refresh history (drives attemptsLeft counter)
       const hr = await teamApi.missionHistory(selected.id);
-      setHistory(hr.data.history || []);
+      setHistory(hr.data.submissions || []);
       // refresh leaderboard
-      const lr = await adminApi.liveScores();
-      setLeaderboard(lr.data.scores || []);
+      const lr = await teamApi.leaderboard();
+      setLeaderboard(lr.data.leaderboard || []);
     } catch (err: any) {
       setResult({ status: 'error', score: 0, message: err.response?.data?.error || 'Submission failed' });
     } finally { setSubmitting(false); }
@@ -76,15 +86,27 @@ export default function ConsolePage() {
     if (!selected || !prompt.trim()) return;
     setSandboxing(true); setResult(null);
     try {
-      const r = await teamApi.sandbox({ missionId: selected.id, promptText: prompt, responseText: response });
-      setResult({ ...r.data, message: '[SANDBOX] ' + (r.data.message || '') });
+      const r = await teamApi.sandbox({
+        mission_id: selected.id,
+        prompt_text: prompt,
+        ai_response: response,
+      });
+      const v = r.data.validation || {};
+      setResult({
+        status: v.status || 'error',
+        score: 0,
+        message: '[SANDBOX] ' + (v.feedback || v.message || ''),
+        confidence: v.confidence,
+        validationNotes: v.errors?.join('; ') || undefined,
+      });
     } catch (err: any) {
       setResult({ status: 'error', score: 0, message: err.response?.data?.error || 'Sandbox failed' });
     } finally { setSandboxing(false); }
   };
 
   const diffColor: Record<string, string> = { easy: '#10b981', medium: '#f59e0b', hard: '#ef4444', expert: '#8b5cf6' };
-  const attemptsLeft = selected ? (selected.maxRetries - (selected.attemptsUsed ?? 0)) : 0;
+  // attemptsLeft derived from history (updated after each submit)
+  const attemptsLeft = selected ? Math.max(0, selected.maxRetries - history.length) : 0;
 
   return (
     <TeamLayout>
@@ -192,8 +214,8 @@ export default function ConsolePage() {
                           {history.map((h, i) => (
                             <tr key={h.id}>
                               <td className="text-muted">{history.length - i}</td>
-                              <td><span className={`badge-status ${h.status}`}>{h.status}</span></td>
-                              <td className="text-accent mono">{h.score}</td>
+                              <td><span className={`badge-status ${h.validationStatus}`}>{h.validationStatus}</span></td>
+                              <td className="text-accent mono">{h.scoreAwarded}</td>
                               <td className="text-muted" style={{ fontSize: '.78rem' }}>{new Date(h.createdAt).toLocaleString()}</td>
                             </tr>
                           ))}

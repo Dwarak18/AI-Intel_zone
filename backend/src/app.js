@@ -48,7 +48,10 @@ app.set('io', io);
 // VIEW ENGINE
 // ==============================================================================
 app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, '../../frontend/views'));
+// Docker: views copied to /app/views; dev: views live in frontend/views
+const _viewsDocker = path.join(__dirname, '../views');
+const _viewsDev    = path.join(__dirname, '../../frontend/views');
+app.set('views', require('fs').existsSync(_viewsDocker) ? _viewsDocker : _viewsDev);
 app.use(expressLayouts);
 app.set('layout', 'layout');
 app.set('layout extractScripts', true);
@@ -150,16 +153,27 @@ app.use((req, res, next) => {
 });
 
 // ==============================================================================
-// REQUEST TIMING MIDDLEWARE
+// REQUEST TIMING & TIMEOUT MIDDLEWARE
 // ==============================================================================
 app.use((req, res, next) => {
   req._startTime = Date.now();
+
+  // Automatic 30-second timeout on all requests
+  const timeoutHandle = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(504).json({ error: 'Request timed out', path: req.path });
+    }
+  }, 30000);
+
   res.on('finish', () => {
+    clearTimeout(timeoutHandle);
     const duration = Date.now() - req._startTime;
     if (duration > 2000) {
       console.warn(`SLOW REQUEST: ${req.method} ${req.path} — ${duration}ms`);
     }
   });
+
+  res.on('close', () => clearTimeout(timeoutHandle));
   next();
 });
 
@@ -171,13 +185,52 @@ const publicDir = path.join(__dirname, '../public');
 if (require('fs').existsSync(publicDir)) {
   app.use(express.static(publicDir));
 }
-// (legacy static folder removed — React handles static assets)
+
+// Legacy admin portal static assets (CSS/JS used by EJS views)
+const _staticDocker = path.join(__dirname, '../static');
+const _staticDev    = path.join(__dirname, '../../frontend/static');
+const staticDir = require('fs').existsSync(_staticDocker) ? _staticDocker
+  : require('fs').existsSync(_staticDev) ? _staticDev : null;
+if (staticDir) {
+  app.use('/static', express.static(staticDir));
+}
 
 // ==============================================================================
-// HEALTH CHECK (before all other routes)
+// HEALTH CHECK (before all other routes — never hangs)
 // ==============================================================================
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+app.get('/health', async (req, res) => {
+  let dbStatus = 'unknown';
+  try {
+    await sequelize.authenticate();
+    dbStatus = 'connected';
+  } catch (_) {
+    dbStatus = 'disconnected';
+  }
+  const healthy = dbStatus === 'connected';
+  res.status(healthy ? 200 : 503).json({
+    server: 'ok',
+    database: dbStatus,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'unknown';
+  try {
+    await sequelize.authenticate();
+    dbStatus = 'connected';
+  } catch (_) {
+    dbStatus = 'disconnected';
+  }
+  res.status(dbStatus === 'connected' ? 200 : 503).json({
+    status: dbStatus === 'connected' ? 'operational' : 'degraded',
+    server: 'ok',
+    database: dbStatus,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
+  });
 });
 
 // ==============================================================================
@@ -196,8 +249,9 @@ app.get('/', (req, res, next) => {
 
 // SPA catch-all — serve React index.html for all non-API routes
 app.get('*', (req, res, next) => {
-  const excluded = ['/api', '/auth', '/admin', '/team', '/static'];
-  if (excluded.some(p => req.path.startsWith(p))) return next();
+  // Only exclude actual backend API/socket paths, not React page routes like /team-login or /admin/dashboard
+  const apiPrefixes = ['/api/', '/auth/api', '/admin/api', '/socket.io'];
+  if (apiPrefixes.some(p => req.path.startsWith(p))) return next();
   const idx = path.join(__dirname, '../public/index.html');
   if (require('fs').existsSync(idx)) return res.sendFile(idx);
   return next();

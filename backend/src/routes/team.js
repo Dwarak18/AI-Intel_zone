@@ -1,35 +1,14 @@
 // ==============================================================================
 // AI INTELLIGENCE ZONE — Control Arena
-// Team Routes — Session-based member portal
+// Team Routes — Legacy session-based routes (kept for backward compat)
+// React SPA now handles /team/* page routes via the SPA catch-all.
 // ==============================================================================
 
 const express = require('express');
 const router = express.Router();
-const { requireTeamLogin } = require('../authMiddleware');
-const { requireRole } = require('../security');
 
-const teamAuth = [requireTeamLogin];
-
-router.get('/', ...teamAuth, (req, res) => {
-  res.redirect('/team/console');
-});
-
-router.get('/console', ...teamAuth, (req, res) => {
-  res.render('team/mission_console', {
-    layout: false,
-    title: 'Mission Console',
-    user: req.user,
-    flash: { success: req.flash('success'), error: req.flash('error'), warning: req.flash('warning') },
-  });
-});
-
-router.get('/mission-console', ...teamAuth, (req, res) => {
-  res.render('team/mission_console', {
-    layout: false,
-    title: 'Mission Console',
-    user: req.user,
-    flash: { success: req.flash('success'), error: req.flash('error'), warning: req.flash('warning') },
-  });
-});
+// All /team/* page routes are handled by the React SPA catch-all.
+// This router is kept to avoid breaking any remaining session-based redirects.
 
 module.exports = router;
+
