@@ -1,4 +1,339 @@
 # AI INTELLIGENCE ZONE — Control Arena
+## System Architecture (Code-Accurate)
+### Version 2.1 | March 2026
+
+---
+
+## 1) What this system is
+
+Control Arena is a Flask monolith for AI competition events. It provides:
+
+- Admin operations UI (server-rendered)
+- Team member web login + mission console
+- Token-authenticated REST APIs
+- Validation and scoring engines
+- Security + audit/event logging
+- Background jobs (Celery worker + beat)
+
+This document reflects the current repository implementation, not a future target design.
+
+---
+
+## 2) High-level architecture
+
+```text
+Client Browser
+ ├─ Admin Login/UI (Jinja templates)
+ └─ Team Login/UI (Jinja templates)
+          │
+          ▼
+      Nginx (optional, in Docker deployment)
+          │
+          ▼
+      Flask App (app.py)
+        ├─ Auth routes (session + JWT)
+        ├─ Admin routes (dashboard, teams, logs, security)
+        ├─ Team routes (mission console page)
+        └─ API routes (submit, missions, leaderboard, team data)
+          │
+          ├─ SQLAlchemy → PostgreSQL (prod) / SQLite (dev)
+          └─ Redis (rate limit/session infra + Celery broker/backend)
+
+Background:
+  Celery Worker + Celery Beat
+    ├─ Ranking recalculation
+    ├─ Health score updates
+    ├─ Cleanup tasks
+    └─ Anomaly/report tasks
+```
+
+---
+
+## 3) Code topology
+
+- App bootstrap: [app.py](app.py)
+- Configs: [config.py](config.py)
+- DB models: [models.py](models.py)
+- Security utilities/decorators: [security.py](security.py)
+- Validation pipeline: [validation_engine.py](validation_engine.py)
+- Scoring engine: [scoring_engine.py](scoring_engine.py)
+- Celery tasks: [celery_worker.py](celery_worker.py)
+
+Routes:
+
+- Auth: [routes/auth.py](routes/auth.py)
+- Admin UI + admin APIs: [routes/admin.py](routes/admin.py)
+- Team APIs: [routes/api.py](routes/api.py)
+- Team web portal pages: [routes/team.py](routes/team.py)
+
+Templates/UI:
+
+- Base admin layout: [templates/base.html](templates/base.html)
+- Admin pages: [templates/admin](templates/admin)
+- Admin login: [templates/auth/login.html](templates/auth/login.html)
+- Team login: [templates/auth/team_login.html](templates/auth/team_login.html)
+- Team console: [templates/team/mission_console.html](templates/team/mission_console.html)
+- Team layout: [templates/team/base.html](templates/team/base.html)
+
+Client JS:
+
+- Shared UI helpers: [static/js/core.js](static/js/core.js)
+- Admin scripts: [static/js/dashboard.js](static/js/dashboard.js), [static/js/leaderboard.js](static/js/leaderboard.js), [static/js/logs.js](static/js/logs.js)
+- Team console integration: [static/js/team_console.js](static/js/team_console.js)
+
+---
+
+## 4) Authentication and authorization model
+
+### 4.1 Session auth (web)
+
+- Admin login page: `/auth/login`
+- Team login page: `/auth/team-login`
+- Logout: `/auth/logout`
+
+After login:
+
+- Admin roles (`super_admin`, `admin`, `moderator`) are redirected to admin dashboard.
+- Team roles (`team_member`, `team_lead`) are redirected to team mission console.
+
+### 4.2 JWT auth (API)
+
+- Token issue: `POST /auth/api/token`
+- Token verify: `POST /auth/api/token/verify`
+
+### 4.3 Hybrid API access
+
+The API decorator accepts:
+
+1. `Authorization: Bearer <jwt>` token, or
+2. Active Flask session user (web fallback)
+
+This enables team web pages to call API routes without manual token injection while still supporting pure API clients.
+
+### 4.4 RBAC
+
+- `require_admin`: admin-only pages/actions
+- `require_role(...)`: explicit role guards
+- `require_team_access`: team ownership checks for team-scoped resources
+
+---
+
+## 5) Core runtime flows
+
+## 5.1 Team web flow
+
+1. Team member logs in at `/auth/team-login`.
+2. Browser opens `/team/mission-console`.
+3. Team console JS loads available missions from `GET /api/missions`.
+4. User submits prompt using `POST /api/submit`.
+5. Response updates:
+   - JSON preview panel
+   - Validation feedback
+   - Confidence value
+   - Submission history table row
+
+## 5.2 API submission flow
+
+`POST /api/submit` in [routes/api.py](routes/api.py):
+
+1. Parse request JSON
+2. Resolve team + mission
+3. Injection detection
+4. Validation pipeline (parse/schema/type/regex/field/confidence)
+5. Hallucination estimation
+6. Score calculation
+7. Persist `Submission` + `AILog`
+8. Update team and mission metrics
+9. Optional ranking recalculation
+10. Emit structured response payload
+
+---
+
+## 6) Submit payload contract (current)
+
+Primary API form:
+
+```json
+{
+  "team_id": "<uuid>",
+  "mission_id": "<uuid>",
+  "prompt_text": "...",
+  "ai_response": "..."
+}
+```
+
+Team console compatibility form:
+
+```json
+{
+  "prompt": "...",
+  "mission_id": "<optional uuid>"
+}
+```
+
+Compatibility rules currently implemented:
+
+- `prompt` is accepted as alias of `prompt_text`
+- If `ai_response` is missing, prompt is reused as response payload
+- If `team_id` is missing, it is derived from logged-in team membership
+- If `mission_id` is missing, first visible active mission is selected
+
+---
+
+## 7) Validation + scoring architecture
+
+### 7.1 Validation engine
+
+`ValidationEngine.validate(...)` performs staged checks:
+
+1. JSON parse
+2. Schema validation (jsonschema)
+3. Type enforcement
+4. Field count/required fields
+5. Regex checks
+6. Confidence scoring
+
+Outputs a normalized `ValidationResult` object with status, stage details, warnings/errors, and confidence.
+
+### 7.2 Scoring engine
+
+`ScoringEngine` computes:
+
+- Accuracy component
+- Speed component
+- Validation component
+- Retry penalty
+- Bonus checks and achievement grants
+- Rank recalculation
+
+Configured weights are sourced from app config/env (`WEIGHT_ACCURACY`, `WEIGHT_SPEED`, `WEIGHT_VALIDATION`).
+
+---
+
+## 8) Security architecture
+
+Main controls:
+
+- Input checks + strict validation
+- Prompt injection pattern detection
+- Tamper/fingerprint helpers
+- Security event logging
+- Audit trail for user/admin actions
+- Role-based endpoint protection
+- Flask-WTF CSRF protection (API blueprints exempted by design)
+
+Important implementation detail:
+
+- Admin and team web sessions are cookie/session based.
+- API consumers can use JWT.
+
+---
+
+## 9) Data model summary
+
+Primary entities in [models.py](models.py):
+
+- `User`
+- `Team`
+- `TeamMember`
+- `Mission`
+- `Submission`
+- `AILog`
+- `AuditLog`
+- `SecurityEvent`
+- `Achievement`
+- `ScoreOverride`
+
+Persistence:
+
+- Production default: PostgreSQL URI from `DATABASE_URL`
+- Development fallback: SQLite (`sqlite:///control_arena_dev.db`)
+
+---
+
+## 10) Background jobs
+
+Celery in [celery_worker.py](celery_worker.py) runs periodic tasks:
+
+- Ranking recalculation (every 60s)
+- Team health score updates (every 5m)
+- Session cleanup (hourly)
+- Activity report generation (every 15m)
+- Anomaly detection (every 2m)
+
+Broker/backend default: Redis database index 1.
+
+---
+
+## 11) Deployment profiles
+
+### 11.1 Local development
+
+- App served directly via Flask
+- Usually SQLite for fast local setup
+- Optional seed data via [seed.py](seed.py)
+
+### 11.2 Docker compose deployment
+
+Defined in [docker-compose.yml](docker-compose.yml):
+
+- `app` (Flask/Gunicorn image target)
+- `postgres`
+- `redis`
+- `nginx`
+- `celery-worker`
+- `celery-beat`
+
+No separate React/Next frontend services are defined in current compose.
+
+---
+
+## 12) Current HTTP surface (key routes)
+
+Web:
+
+- `/auth/login`
+- `/auth/team-login`
+- `/admin/`
+- `/team/mission-console`
+
+API:
+
+- `GET /api/health`
+- `POST /api/submit`
+- `GET /api/leaderboard`
+- `GET /api/missions`
+- `GET /api/missions/<mission_id>`
+- `GET /api/team/<team_id>`
+- `GET /api/team/<team_id>/submissions`
+- `GET /api/team/<team_id>/achievements`
+
+Auth API:
+
+- `POST /auth/api/token`
+- `POST /auth/api/token/verify`
+
+---
+
+## 13) Known gaps / roadmap suggestions
+
+1. Team console currently reuses prompt text as response when `ai_response` is absent; consider explicit AI invocation pipeline.
+2. Add stronger API contract versioning for backward compatibility.
+3. Add automated integration tests for team web submit path.
+4. Add centralized structured logging to file/collector in production.
+5. Harden default credential/secret posture for non-dev environments.
+
+---
+
+## 14) Quick operator notes
+
+- Health check: `/api/health`
+- Admin default (seed/dev): `arena_admin / ChangeMe@2026!`
+- Team login page: `/auth/team-login`
+- Team console page: `/team/mission-console`
+
+This file should be treated as the source-of-truth architecture summary for external tools and reviewers.
+# AI INTELLIGENCE ZONE — Control Arena
 ## Production-Grade System Architecture Document
 ### Version 2.0 | March 2026
 
@@ -13,9 +348,9 @@
 └──────────────────────────────────────────────────────────────────────────────────┘
 
                               ┌─────────────────┐
-                              │   CLOUDFLARE     │
-                              │   WAF + DDoS     │
-                              │   Protection     │
+                              │   CLOUDFLARE    57  │
+                              │   WAF + DDoS    │
+                              │   Protection    │
                               └────────┬────────┘
                                        │
                               ┌────────▼────────┐

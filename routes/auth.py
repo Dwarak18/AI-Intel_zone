@@ -24,7 +24,9 @@ auth_bp = Blueprint("auth", __name__)
 def login():
     """Admin panel login page."""
     if current_user.is_authenticated:
-        return redirect(url_for("admin.dashboard"))
+        if current_user.is_admin:
+            return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("team.mission_console"))
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -57,14 +59,58 @@ def login():
     return render_template("auth/login.html")
 
 
+@auth_bp.route("/team-login", methods=["GET", "POST"])
+def team_login():
+    """Team member login page for web mission console."""
+    if current_user.is_authenticated:
+        if current_user.is_admin:
+            return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("team.mission_console"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        user = User.query.filter_by(username=username).first()
+
+        if user and user.check_password(password) and user.is_active:
+            if user.role not in ("team_member", "team_lead"):
+                flash("Use admin login for this account.", "warning")
+                AuditLogger.log(
+                    "team_login_failed",
+                    f"Non-team account attempted team login: {username}",
+                    severity="warning",
+                )
+                return render_template("auth/team_login.html"), 403
+
+            login_user(user, remember=True)
+            user.last_login = datetime.now(timezone.utc)
+            user.last_login_ip = request.remote_addr
+            user.login_count = (user.login_count or 0) + 1
+            db.session.commit()
+
+            AuditLogger.log("team_login_success", f"Team login: {username}", user_id=user.id)
+            flash(f"Welcome, {user.username}!", "success")
+            return redirect(url_for("team.mission_console"))
+
+        AuditLogger.log("team_login_failed", f"Failed team login attempt for: {username}",
+                      severity="warning")
+        flash("Invalid credentials or account disabled.", "danger")
+
+    return render_template("auth/team_login.html")
+
+
 @auth_bp.route("/logout")
 @login_required
 def logout():
     """Logout current user."""
+    is_admin_user = current_user.is_admin
     AuditLogger.log("logout", f"User logged out: {current_user.username}")
     logout_user()
     flash("You have been logged out.", "info")
-    return redirect(url_for("auth.login"))
+    if is_admin_user:
+        return redirect(url_for("auth.login"))
+    return redirect(url_for("auth.team_login"))
 
 
 # ==============================================================================
@@ -146,8 +192,15 @@ def jwt_required(f):
 
     @wraps(f)
     def decorated(*args, **kwargs):
+        from flask import g
         auth_header = request.headers.get("Authorization", "")
+
+        # Session-auth fallback for web portal routes
         if not auth_header.startswith("Bearer "):
+            if current_user.is_authenticated and current_user.is_active:
+                g.current_user = current_user
+                g.current_user_id = current_user.id
+                return f(*args, **kwargs)
             return jsonify({"error": "Authorization header with Bearer token required"}), 401
 
         token = auth_header.split(" ")[1]
@@ -161,7 +214,6 @@ def jwt_required(f):
                 return jsonify({"error": "User account not found or disabled"}), 401
 
             # Attach user to request context
-            from flask import g
             g.current_user = user
             g.current_user_id = user.id
 

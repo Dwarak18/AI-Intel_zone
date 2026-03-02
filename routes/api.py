@@ -16,6 +16,7 @@ import json
 from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, current_app, g
+from flask_login import current_user
 
 from models import db, Team, Mission, Submission, AILog, TeamMember
 from validation_engine import ValidationEngine, HallucinationDetector
@@ -66,19 +67,43 @@ def submit_prompt():
         "ai_response": "..."   // The AI-generated response to validate
     }
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "JSON request body required"}), 400
 
     # ── Extract Fields ────────────────────────────────────────────────
     team_id = data.get("team_id")
     mission_id = data.get("mission_id")
-    prompt_text = data.get("prompt_text", "").strip()
-    ai_response = data.get("ai_response", "").strip()
+    prompt_text = (data.get("prompt_text") or data.get("prompt") or "").strip()
+    ai_response = (data.get("ai_response") or data.get("response") or "").strip()
+
+    # Team-console friendly fallback:
+    # if only prompt is provided, validate that prompt as AI response payload.
+    if prompt_text and not ai_response:
+        ai_response = prompt_text
+
+    # Derive team from logged-in user membership when team_id omitted
+    if not team_id and getattr(g, "current_user", None):
+        membership = TeamMember.query.filter_by(
+            user_id=g.current_user.id,
+            is_active=True,
+        ).first()
+        if membership:
+            team_id = membership.team_id
+
+    # Auto-pick first available mission if mission_id omitted
+    if not mission_id:
+        auto_mission = Mission.query.filter_by(is_active=True, is_visible=True).order_by(
+            Mission.order_index.asc()
+        ).first()
+        if auto_mission:
+            mission_id = auto_mission.id
 
     # ── Basic Validation ──────────────────────────────────────────────
     if not all([team_id, mission_id, prompt_text, ai_response]):
-        return jsonify({"error": "Missing required fields: team_id, mission_id, prompt_text, ai_response"}), 400
+        return jsonify({
+            "error": "Missing required fields. Required: prompt (or prompt_text), team_id, mission_id, ai_response",
+        }), 400
 
     # ── Verify Team ───────────────────────────────────────────────────
     team = Team.query.get(team_id)

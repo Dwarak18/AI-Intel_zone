@@ -573,6 +573,7 @@ class Achievement(db.Model):
     team = db.relationship("Team", back_populates="achievements")
 
     def to_dict(self):
+        awarded_at = self.awarded_at or utcnow()
         return {
             "id": self.id,
             "team_id": self.team_id,
@@ -581,7 +582,7 @@ class Achievement(db.Model):
             "description": self.description,
             "icon": self.icon,
             "points_awarded": self.points_awarded,
-            "awarded_at": self.awarded_at.isoformat(),
+            "awarded_at": awarded_at.isoformat(),
         }
 
 

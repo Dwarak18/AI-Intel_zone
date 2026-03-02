@@ -52,10 +52,12 @@ def create_app(config_class=None):
     from routes.admin import admin_bp
     from routes.api import api_bp
     from routes.auth import auth_bp
+    from routes.team import team_bp
 
     app.register_blueprint(admin_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(auth_bp, url_prefix="/auth")
+    app.register_blueprint(team_bp)
 
     # Exempt API routes from CSRF (they use JWT)
     csrf.exempt(api_bp)
