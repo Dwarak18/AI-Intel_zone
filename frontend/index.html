@@ -34,15 +34,6 @@
     .particles{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:0}
     .particle{position:absolute;width:2px;height:2px;border-radius:50%;background:var(--accent);animation:float linear infinite}
     @keyframes float{0%{transform:translateY(100vh) scale(0);opacity:0}10%{opacity:.5}90%{opacity:.15}100%{transform:translateY(-10vh) scale(1);opacity:0}}
-    .card { background: #161b22; border: 1px solid #30363d; }
-    .card-header { background: #1c2128; border-bottom: 1px solid #30363d; }
-    .table { --bs-table-bg: transparent; }
-    .table-hover tbody tr:hover { background: rgba(255,255,255,.04); }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-    .live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#3fb950; animation:pulse 1.4s infinite; }
-    .console-output { background:#0d1117; font-family:'Cascadia Code','Fira Code',monospace; font-size:.85rem; height:320px; overflow-y:auto; border:1px solid #30363d; padding:1rem; border-radius:.375rem; }
-    textarea.code-input { background:#161b22; color:#e6edf3; font-family:'Cascadia Code','Fira Code',monospace; font-size:.85rem; border:1px solid #30363d; resize:vertical; }
-    textarea.code-input:focus { border-color:#58a6ff; box-shadow:0 0 0 .2rem rgba(88,166,255,.2); }
 </style>
 </head>
 <body>
