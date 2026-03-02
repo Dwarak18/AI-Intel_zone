@@ -1,0 +1,152 @@
+<%# views/admin/logs.ejs %>
+
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <h1 class="page-title">🖥️ AI Logs</h1>
+        <p class="page-subtitle">Full AI interaction logs — prompts, outputs, scores, and anomalies.</p>
+    </div>
+</div>
+
+<!-- Filters -->
+<form method="GET" action="/admin/logs" class="d-flex gap-2 flex-wrap mb-3 align-items-end">
+    <div>
+        <label class="form-label small mb-1">Team</label>
+        <select name="team_id" class="form-select form-select-sm bg-dark text-white border-secondary" style="min-width:130px;">
+            <option value="">All Teams</option>
+            <% teams.forEach(function(t) { %>
+            <option value="<%= t.id %>" <%= filters.team_id == t.id ? 'selected' : '' %>><%= t.teamCode %></option>
+            <% }) %>
+        </select>
+    </div>
+    <div>
+        <label class="form-label small mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm bg-dark text-white border-secondary">
+            <option value="">All</option>
+            <option value="valid" <%= filters.status === 'valid' ? 'selected' : '' %>>Valid</option>
+            <option value="invalid" <%= filters.status === 'invalid' ? 'selected' : '' %>>Invalid</option>
+            <option value="error" <%= filters.status === 'error' ? 'selected' : '' %>>Error</option>
+        </select>
+    </div>
+    <div>
+        <label class="form-label small mb-1">From</label>
+        <input type="date" name="date_from" class="form-control form-control-sm bg-dark text-white border-secondary" value="<%= filters.date_from || '' %>">
+    </div>
+    <div>
+        <label class="form-label small mb-1">To</label>
+        <input type="date" name="date_to" class="form-control form-control-sm bg-dark text-white border-secondary" value="<%= filters.date_to || '' %>">
+    </div>
+    <div>
+        <label class="form-label small mb-1">Suspicious</label>
+        <select name="flagged" class="form-select form-select-sm bg-dark text-white border-secondary">
+            <option value="">All</option>
+            <option value="1" <%= filters.flagged === '1' ? 'selected' : '' %>>Suspicious only</option>
+        </select>
+    </div>
+    <button class="btn btn-sm btn-outline-primary align-self-end"><i class="bi bi-search"></i> Filter</button>
+    <a href="/admin/logs" class="btn btn-sm btn-outline-secondary align-self-end">Clear</a>
+</form>
+
+<div class="arena-table">
+    <table class="table table-dark table-hover table-sm mb-0">
+        <thead>
+            <tr><th>Time</th><th>Team</th><th>Validation</th><th>Confidence</th><th>Hallucination</th><th>Injection Score</th><th>Rejected</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+        <% logs.forEach(function(log) { %>
+        <tr class="<%= log.rejected ? 'table-danger' : '' %>">
+            <td class="text-muted small"><%= log.createdAt ? new Date(log.createdAt).toLocaleString() : '' %></td>
+            <td><span class="badge bg-secondary"><%= log.team ? log.team.teamCode : 'N/A' %></span></td>
+            <td>
+                <% if (log.validationResult === 'valid') { %>
+                    <span class="badge bg-success">valid</span>
+                <% } else if (log.validationResult === 'invalid') { %>
+                    <span class="badge bg-warning text-dark">invalid</span>
+                <% } else { %>
+                    <span class="badge bg-secondary"><%= log.validationResult || '—' %></span>
+                <% } %>
+            </td>
+            <td class="font-monospace small"><%= log.confidenceScore ? (log.confidenceScore * 100).toFixed(0) + '%' : '—' %></td>
+            <td class="font-monospace small">
+                <% var hp = log.hallucinationProbability || 0; %>
+                <span class="<%= hp > 0.7 ? 'text-danger' : (hp > 0.4 ? 'text-warning' : 'text-muted') %>"><%= (hp * 100).toFixed(0) %>%</span>
+            </td>
+            <td class="font-monospace small">
+                <% var ip = log.injectionScore || 0; %>
+                <span class="<%= ip > 0.7 ? 'text-danger fw-bold' : (ip > 0.4 ? 'text-warning' : 'text-muted') %>"><%= ip.toFixed(3) %></span>
+            </td>
+            <td>
+                <% if (log.rejected) { %><span class="badge bg-danger">Yes</span><% } else { %><span class="text-muted">—</span><% } %>
+            </td>
+            <td>
+                <button class="btn btn-xs btn-outline-info" onclick="viewLog('<%= log.id %>')">
+                    <i class="bi bi-eye"></i>
+                </button>
+            </td>
+        </tr>
+        <% }) %>
+        <% if (logs.length === 0) { %>
+        <tr><td colspan="8" class="text-center text-muted py-4">No logs found.</td></tr>
+        <% } %>
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination -->
+<% if (pagination.pages > 1) { %>
+<nav class="mt-3">
+    <ul class="pagination pagination-sm justify-content-center">
+        <% for (var p = 1; p <= pagination.pages; p++) { %>
+        <li class="page-item <%= p === pagination.page ? 'active' : '' %>">
+            <a class="page-link" href="?page=<%= p %>&team_id=<%= filters.team_id || '' %>&status=<%= filters.status || '' %>&date_from=<%= filters.date_from || '' %>&date_to=<%= filters.date_to || '' %>&flagged=<%= filters.flagged || '' %>"><%= p %></a>
+        </li>
+        <% } %>
+    </ul>
+</nav>
+<% } %>
+
+<!-- Log Detail Modal -->
+<div class="modal fade" id="logDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Log Detail</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="logDetailBody">
+                <div class="text-center py-4"><div class="spinner-border text-info"></div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function viewLog(id) {
+    const modal = new bootstrap.Modal(document.getElementById('logDetailModal'));
+    document.getElementById('logDetailBody').innerHTML = '<div class="text-center py-4"><div class="spinner-border text-info"></div></div>';
+    modal.show();
+    fetch('/admin/api/logs/' + id)
+        .then(r => r.json())
+        .then(d => {
+            document.getElementById('logDetailBody').innerHTML = `
+<div class="row g-3">
+<div class="col-md-6">
+<table class="table table-dark table-sm"><tbody>
+<tr><th>Team</th><td>${d.teamCode}</td></tr>
+<tr><th>Mission</th><td>${d.missionTitle || '—'}</td></tr>
+<tr><th>Time</th><td>${d.createdAt ? new Date(d.createdAt).toLocaleString() : '—'}</td></tr>
+<tr><th>Validation</th><td>${d.validationResult || '—'}</td></tr>
+<tr><th>Confidence</th><td>${d.confidenceScore ? (d.confidenceScore*100).toFixed(0)+'%' : '—'}</td></tr>
+<tr><th>Hallucination</th><td>${d.hallucinationProbability ? (d.hallucinationProbability*100).toFixed(0)+'%' : '—'}</td></tr>
+<tr><th>Injection Score</th><td>${(d.injectionScore||0).toFixed(3)}</td></tr>
+<tr><th>Rejected</th><td>${d.rejected ? '<span class="badge bg-danger">Yes</span>' : 'No'}</td></tr>
+</tbody></table>
+</div>
+<div class="col-md-6">
+<h6>Prompt</h6><pre class="p-2 rounded" style="background:#111;font-size:.75rem;max-height:200px;overflow-y:auto;">${(d.promptText||'').replace(/</g,'&lt;')}</pre>
+<h6 class="mt-2">AI Output</h6><pre class="p-2 rounded" style="background:#111;font-size:.75rem;max-height:200px;overflow-y:auto;">${(d.aiRawOutput||'').replace(/</g,'&lt;')}</pre>
+</div>
+</div>`;
+        })
+        .catch(() => { document.getElementById('logDetailBody').innerHTML = '<div class="alert alert-danger">Failed to load log.</div>'; });
+}
+</script>

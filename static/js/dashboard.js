@@ -89,23 +89,27 @@
         if (queueEl) queueEl.textContent = data.server_load.queue_depth;
     }
 
-    function refreshStats() {
-        fetch('/admin/api/stats').then(r => r.json()).then(data => {
-            document.getElementById('stat-total-teams').textContent = data.teams.total;
-            document.getElementById('stat-total-subs').textContent = data.submissions.total;
-            document.getElementById('stat-recent').textContent = data.submissions.recent_hour;
-            document.getElementById('stat-security').textContent = data.security.open_events;
-            const rate = data.submissions.total > 0 ? ((data.submissions.valid / data.submissions.total) * 100).toFixed(1) : '0.0';
-            document.getElementById('stat-validation-rate').textContent = `${rate}%`;
-        }).catch(() => null);
+    async function refreshStats() {
+        const data = await ArenaUI.safeFetch('/admin/api/stats');
+        if (!data) return;
+        document.getElementById('stat-total-teams').textContent = data.teams.total;
+        document.getElementById('stat-total-subs').textContent = data.submissions.total;
+        document.getElementById('stat-recent').textContent = data.submissions.recent_hour;
+        document.getElementById('stat-security').textContent = data.security.open_events;
+        const rate = data.submissions.total > 0 ? ((data.submissions.valid / data.submissions.total) * 100).toFixed(1) : '0.0';
+        document.getElementById('stat-validation-rate').textContent = `${rate}%`;
     }
 
-    function refreshFeed() {
-        fetch('/admin/api/activity_feed?limit=15').then(r => r.json()).then(data => renderFeed(data.feed || [])).catch(() => null);
+    async function refreshFeed() {
+        const data = await ArenaUI.safeFetch('/admin/api/activity_feed?limit=15');
+        if (!data) return;
+        renderFeed(data.feed || []);
     }
 
-    function refreshAnalytics() {
-        fetch('/admin/api/analytics').then(r => r.json()).then(upsertCharts).catch(() => null);
+    async function refreshAnalytics() {
+        const data = await ArenaUI.safeFetch('/admin/api/analytics');
+        if (!data) return;
+        upsertCharts(data);
     }
 
     window.refreshStats = refreshStats;

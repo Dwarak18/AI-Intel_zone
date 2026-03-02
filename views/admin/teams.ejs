@@ -1,0 +1,217 @@
+<%# views/admin/teams.ejs %>
+
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <h1 class="page-title">👥 Team Management</h1>
+        <p class="page-subtitle">Register teams, manage members, apply score overrides.</p>
+    </div>
+    <div class="toolbar">
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#createTeamModal">
+            <i class="bi bi-plus-lg"></i> New Team
+        </button>
+    </div>
+</div>
+
+<form method="GET" action="/admin/teams" class="d-flex gap-2 mb-3 flex-wrap">
+    <input name="search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Search teams..." value="<%= search || '' %>">
+    <select name="status" class="form-select form-select-sm" style="max-width:150px;" onchange="this.form.submit()">
+        <option value="all" <%= statusFilter === 'all' ? 'selected' : '' %>>All Statuses</option>
+        <option value="active" <%= statusFilter === 'active' ? 'selected' : '' %>>Active</option>
+        <option value="locked" <%= statusFilter === 'locked' ? 'selected' : '' %>>Locked</option>
+        <option value="disqualified" <%= statusFilter === 'disqualified' ? 'selected' : '' %>>Disqualified</option>
+    </select>
+    <button class="btn btn-sm btn-outline-secondary" type="submit"><i class="bi bi-search"></i> Search</button>
+</form>
+
+<div class="arena-table">
+    <table class="table table-dark table-hover mb-0">
+        <thead>
+            <tr>
+                <th>Team Code</th><th>Name</th><th>Institution</th>
+                <th>Score</th><th>Rank</th><th>Missions</th>
+                <th>Members</th><th>Status</th><th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        <% teams.forEach(function(team) { %>
+        <tr>
+            <td><span class="badge bg-primary font-monospace"><%= team.teamCode %></span></td>
+            <td><strong><%= team.name %></strong></td>
+            <td class="text-muted"><%= team.institution || '—' %></td>
+            <td class="font-monospace"><%= (team.totalScore || 0).toFixed(2) %></td>
+            <td><%= team.currentRank ? '#' + team.currentRank : '—' %></td>
+            <td><%= team.missionsCompleted || 0 %></td>
+            <td><%= (team.members || []).length %></td>
+            <td>
+                <% if (team.status === 'active') { %>
+                    <span class="badge bg-success">Active</span>
+                <% } else if (team.status === 'locked') { %>
+                    <span class="badge bg-warning text-dark">Locked</span>
+                <% } else { %>
+                    <span class="badge bg-danger">DQ</span>
+                <% } %>
+            </td>
+            <td>
+                <div class="d-flex gap-1 flex-wrap">
+                    <button class="btn btn-xs btn-outline-info" data-bs-toggle="modal" data-bs-target="#addMemberModal-<%= team.id %>">
+                        <i class="bi bi-person-plus"></i>
+                    </button>
+                    <button class="btn btn-xs btn-outline-warning" data-bs-toggle="modal" data-bs-target="#overrideModal-<%= team.id %>">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <form method="POST" action="/admin/teams/<%= team.id %>/lock" class="d-inline">
+                        <button class="btn btn-xs <%= team.status === 'locked' ? 'btn-success' : 'btn-outline-warning' %>">
+                            <i class="bi bi-<%= team.status === 'locked' ? 'unlock' : 'lock' %>"></i>
+                        </button>
+                    </form>
+                    <% if (team.status !== 'disqualified') { %>
+                    <button class="btn btn-xs btn-outline-danger" data-bs-toggle="modal" data-bs-target="#dqModal-<%= team.id %>">
+                        <i class="bi bi-slash-circle"></i>
+                    </button>
+                    <% } %>
+                </div>
+            </td>
+        </tr>
+        <% }) %>
+        <% if (teams.length === 0) { %>
+        <tr><td colspan="9" class="text-center text-muted py-4">No teams found.</td></tr>
+        <% } %>
+        </tbody>
+    </table>
+</div>
+
+<!-- ── Modals ──────────────────────────────────────────────────── -->
+<!-- Create Team Modal -->
+<div class="modal fade" id="createTeamModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Create New Team</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/admin/teams/create">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Team Code</label>
+                        <input name="team_code" class="form-control bg-dark text-white border-secondary" placeholder="ALPHA" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Team Name</label>
+                        <input name="name" class="form-control bg-dark text-white border-secondary" placeholder="Alpha Research" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Institution</label>
+                        <input name="institution" class="form-control bg-dark text-white border-secondary" placeholder="University / Company">
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Team</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<% teams.forEach(function(team) { %>
+<!-- Add Member Modal -->
+<div class="modal fade" id="addMemberModal-<%= team.id %>" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Add Member to <%= team.teamCode %></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/admin/teams/<%= team.id %>/add_member">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input name="username" class="form-control bg-dark text-white border-secondary" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email</label>
+                        <input name="email" type="email" class="form-control bg-dark text-white border-secondary" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input name="password" type="password" class="form-control bg-dark text-white border-secondary" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Role</label>
+                        <select name="role_in_team" class="form-select bg-dark text-white border-secondary">
+                            <option value="lead">Team Lead</option>
+                            <option value="member" selected>Member</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add Member</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Score Override Modal -->
+<div class="modal fade" id="overrideModal-<%= team.id %>" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Score Override: <%= team.teamCode %></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/admin/teams/<%= team.id %>/override">
+                <div class="modal-body">
+                    <p class="text-muted">Current score: <strong><%= (team.totalScore || 0).toFixed(2) %></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label">New Score</label>
+                        <input name="new_score" type="number" step="0.01" class="form-control bg-dark text-white border-secondary" value="<%= team.totalScore || 0 %>" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Override Type</label>
+                        <select name="override_type" class="form-select bg-dark text-white border-secondary">
+                            <option value="correction">Correction</option>
+                            <option value="penalty">Penalty</option>
+                            <option value="bonus">Bonus</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Reason (required)</label>
+                        <textarea name="reason" rows="3" class="form-control bg-dark text-white border-secondary" required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">Apply Override</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Disqualify Modal -->
+<div class="modal fade" id="dqModal-<%= team.id %>" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark border-secondary border-danger">
+            <div class="modal-header border-danger">
+                <h5 class="modal-title text-danger">Disqualify: <%= team.teamCode %></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/admin/teams/<%= team.id %>/disqualify">
+                <div class="modal-body">
+                    <div class="alert alert-danger">This action will immediately remove the team from rankings.</div>
+                    <div class="mb-3">
+                        <label class="form-label">Reason</label>
+                        <textarea name="reason" rows="3" class="form-control bg-dark text-white border-secondary" required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Confirm Disqualify</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<% }) %>

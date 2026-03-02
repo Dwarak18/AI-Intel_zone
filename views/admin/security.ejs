@@ -1,0 +1,136 @@
+<%# views/admin/security.ejs %>
+
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <h1 class="page-title">🛡️ Security Events</h1>
+        <p class="page-subtitle">Injection attempts, anomaly flags, and threat events.</p>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="stat-card">
+            <div class="stat-label">Total Events</div>
+            <div class="stat-value text-info"><%= totalEvents %></div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="stat-card">
+            <div class="stat-label">Critical</div>
+            <div class="stat-value text-danger"><%= criticalEvents %></div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="stat-card">
+            <div class="stat-label">Open Events</div>
+            <div class="stat-value text-warning"><%= openEvents %></div>
+        </div>
+    </div>
+</div>
+
+<form method="GET" action="/admin/security" class="d-flex gap-2 mb-3 flex-wrap">
+    <select name="severity" class="form-select form-select-sm bg-dark text-white border-secondary" style="max-width:150px;" onchange="this.form.submit()">
+        <option value="">All Severities</option>
+        <option value="info" <%= (filters.severity === 'info') ? 'selected' : '' %>>Info</option>
+        <option value="warning" <%= (filters.severity === 'warning') ? 'selected' : '' %>>Warning</option>
+        <option value="critical" <%= (filters.severity === 'critical') ? 'selected' : '' %>>Critical</option>
+    </select>
+    <select name="status" class="form-select form-select-sm bg-dark text-white border-secondary" style="max-width:150px;" onchange="this.form.submit()">
+        <option value="">All Statuses</option>
+        <option value="open" <%= (filters.status === 'open') ? 'selected' : '' %>>Open</option>
+        <option value="resolved" <%= (filters.status === 'resolved') ? 'selected' : '' %>>Resolved</option>
+        <option value="false_positive" <%= (filters.status === 'false_positive') ? 'selected' : '' %>>False Positive</option>
+    </select>
+    <a href="/admin/security" class="btn btn-sm btn-outline-secondary">Clear</a>
+</form>
+
+<div class="arena-table">
+    <table class="table table-dark table-hover mb-0">
+        <thead>
+            <tr><th>Time</th><th>Type</th><th>Severity</th><th>Description</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+        <% events.forEach(function(ev) { %>
+        <tr>
+            <td class="text-muted small"><%= ev.createdAt ? new Date(ev.createdAt).toLocaleString() : '' %></td>
+            <td class="font-monospace small"><%= ev.eventType || '—' %></td>
+            <td>
+                <% if (ev.severity === 'critical') { %>
+                    <span class="badge bg-danger">CRITICAL</span>
+                <% } else if (ev.severity === 'warning') { %>
+                    <span class="badge bg-warning text-dark">WARNING</span>
+                <% } else { %>
+                    <span class="badge bg-info text-dark">INFO</span>
+                <% } %>
+            </td>
+            <td class="small"><%= (ev.description || '').substring(0, 100) %><%= (ev.description || '').length > 100 ? '…' : '' %></td>
+            <td>
+                <% if (ev.status === 'open') { %>
+                    <span class="badge bg-danger">Open</span>
+                <% } else if (ev.status === 'resolved') { %>
+                    <span class="badge bg-success">Resolved</span>
+                <% } else { %>
+                    <span class="badge bg-secondary">FP</span>
+                <% } %>
+            </td>
+            <td>
+                <% if (ev.status === 'open') { %>
+                <button class="btn btn-xs btn-outline-success" data-bs-toggle="modal" data-bs-target="#resolveModal-<%= ev.id %>">
+                    Resolve
+                </button>
+                <% } %>
+            </td>
+        </tr>
+        <% }) %>
+        <% if (events.length === 0) { %>
+        <tr><td colspan="6" class="text-center text-muted py-4">No security events found.</td></tr>
+        <% } %>
+        </tbody>
+    </table>
+</div>
+
+<% if (pagination.pages > 1) { %>
+<nav class="mt-3">
+    <ul class="pagination pagination-sm justify-content-center">
+        <% for (var p = 1; p <= pagination.pages; p++) { %>
+        <li class="page-item <%= p === pagination.page ? 'active' : '' %>">
+            <a class="page-link" href="?page=<%= p %>&severity=<%= filters.severity || '' %>&status=<%= filters.status || '' %>"><%= p %></a>
+        </li>
+        <% } %>
+    </ul>
+</nav>
+<% } %>
+
+<% events.forEach(function(ev) { %>
+<% if (ev.status === 'open') { %>
+<div class="modal fade" id="resolveModal-<%= ev.id %>" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Resolve Event #<%= ev.id %></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/admin/security/<%= ev.id %>/resolve">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Resolution</label>
+                        <select name="status" class="form-select bg-dark text-white border-secondary">
+                            <option value="resolved">Resolved</option>
+                            <option value="false_positive">False Positive</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Notes</label>
+                        <textarea name="notes" rows="3" class="form-control bg-dark text-white border-secondary"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<% } %>
+<% }) %>

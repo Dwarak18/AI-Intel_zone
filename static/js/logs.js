@@ -22,26 +22,28 @@
         if (el) el.innerHTML = html;
     }
 
-    function loadLogDetail(logId) {
-        fetch(`/admin/api/logs/${logId}`)
-            .then(r => r.json())
-            .then(log => {
-                setContent('logModalTitle', `Log Detail · ${ArenaUI.escapeHtml(log.team_code)}${log.mission_title ? ' · ' + ArenaUI.escapeHtml(log.mission_title) : ''}`);
-                setContent('logPrompt', ArenaUI.escapeHtml(ArenaUI.truncate(log.prompt_text, 10000)));
-                setContent('logRawOutput', jsonHighlight(log.ai_raw_output));
-                setContent('logParsedOutput', jsonHighlight(log.ai_parsed_output || '{}'));
-                setContent('logValidationMeta', `Parse: ${ArenaUI.escapeHtml(log.parse_result || 'N/A')} · Validation: ${ArenaUI.escapeHtml(log.validation_result || 'N/A')} · Confidence: ${Number(log.confidence_score || 0).toFixed(3)}`);
-                setContent('logSecurityMeta', `Injection: ${Number(log.injection_score || 0).toFixed(3)} · Hallucination: ${(Number(log.hallucination_probability || 0) * 100).toFixed(1)}% · Retry: ${log.retry_attempt || 0}`);
-                setContent('logErrors', ArenaUI.escapeHtml(ArenaUI.truncate(log.error_details || 'None', 6000)));
+    async function loadLogDetail(logId) {
+        const log = await ArenaUI.safeFetch(`/admin/api/logs/${logId}`);
+        if (!log) {
+            setContent('logModalTitle', 'Error loading log detail');
+            setContent('logPrompt', 'Failed to fetch log data. Please try again.');
+            detailModal?.show();
+            return;
+        }
+        setContent('logModalTitle', `Log Detail · ${ArenaUI.escapeHtml(log.team_code)}${log.mission_title ? ' · ' + ArenaUI.escapeHtml(log.mission_title) : ''}`);
+        setContent('logPrompt', ArenaUI.escapeHtml(ArenaUI.truncate(log.prompt_text, 10000)));
+        setContent('logRawOutput', jsonHighlight(log.ai_raw_output));
+        setContent('logParsedOutput', jsonHighlight(log.ai_parsed_output || '{}'));
+        setContent('logValidationMeta', `Parse: ${ArenaUI.escapeHtml(log.parse_result || 'N/A')} · Validation: ${ArenaUI.escapeHtml(log.validation_result || 'N/A')} · Confidence: ${Number(log.confidence_score || 0).toFixed(3)}`);
+        setContent('logSecurityMeta', `Injection: ${Number(log.injection_score || 0).toFixed(3)} · Hallucination: ${(Number(log.hallucination_probability || 0) * 100).toFixed(1)}% · Retry: ${log.retry_attempt || 0}`);
+        setContent('logErrors', ArenaUI.escapeHtml(ArenaUI.truncate(log.error_details || 'None', 6000)));
 
-                const copyPromptBtn = document.getElementById('copyPromptBtn');
-                const copyOutputBtn = document.getElementById('copyOutputBtn');
-                copyPromptBtn.onclick = () => ArenaUI.copyText(log.prompt_text || '', copyPromptBtn);
-                copyOutputBtn.onclick = () => ArenaUI.copyText(log.ai_raw_output || '', copyOutputBtn);
+        const copyPromptBtn = document.getElementById('copyPromptBtn');
+        const copyOutputBtn = document.getElementById('copyOutputBtn');
+        copyPromptBtn.onclick = () => ArenaUI.copyText(log.prompt_text || '', copyPromptBtn);
+        copyOutputBtn.onclick = () => ArenaUI.copyText(log.ai_raw_output || '', copyOutputBtn);
 
-                detailModal?.show();
-            })
-            .catch(() => null);
+        detailModal?.show();
     }
 
     tableBody.addEventListener('click', event => {

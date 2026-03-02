@@ -1,0 +1,75 @@
+<%# views/admin/leaderboard.ejs %>
+
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <h1 class="page-title">🏆 Leaderboard</h1>
+        <p class="page-subtitle">Live rankings &mdash; auto-updates via Socket.IO.</p>
+    </div>
+    <div class="toolbar">
+        <form method="POST" action="/admin/leaderboard/recalculate" class="d-inline">
+            <button class="btn btn-sm btn-outline-warning"><i class="bi bi-calculator"></i> Recalculate Rankings</button>
+        </form>
+    </div>
+</div>
+
+<div class="arena-table">
+    <table class="table table-dark table-hover mb-0">
+        <thead>
+            <tr>
+                <th>Rank</th><th>Team Code</th><th>Name</th><th>Institution</th>
+                <th>Score</th><th>Missions</th><th>Valid %</th><th>Hallucinations</th><th>Status</th>
+            </tr>
+        </thead>
+        <tbody id="leaderboard-body">
+        <% teams.forEach(function(team, idx) { %>
+        <tr data-team-id="<%= team.id %>">
+            <td>
+                <% if (team.currentRank === 1 || (!team.currentRank && idx === 0)) { %>
+                    <span class="badge bg-warning text-dark fs-6">🥇</span>
+                <% } else if (team.currentRank === 2 || (!team.currentRank && idx === 1)) { %>
+                    <span class="badge bg-secondary fs-6">🥈</span>
+                <% } else if (team.currentRank === 3 || (!team.currentRank && idx === 2)) { %>
+                    <span class="badge bg-danger fs-6">🥉</span>
+                <% } else { %>
+                    <strong>#<%= team.currentRank || (idx + 1) %></strong>
+                <% } %>
+            </td>
+            <td><span class="badge bg-primary font-monospace"><%= team.teamCode %></span></td>
+            <td><strong><%= team.name %></strong></td>
+            <td class="text-muted"><%= team.institution || '—' %></td>
+            <td class="font-monospace fw-bold text-info"><%= (team.totalScore || 0).toFixed(2) %></td>
+            <td><%= team.missionsCompleted || 0 %></td>
+            <td>
+                <div class="d-flex align-items-center gap-2">
+                    <div class="score-bar" style="width:60px;">
+                        <div class="score-bar-fill" style="width:<%= team.validationRate || 0 %>%"></div>
+                    </div>
+                    <span class="small"><%= (team.validationRate || 0).toFixed(0) %>%</span>
+                </div>
+            </td>
+            <td>
+                <% if ((team.hallucinationCount || 0) > 10) { %>
+                    <span class="badge bg-danger"><%= team.hallucinationCount %></span>
+                <% } else if ((team.hallucinationCount || 0) > 3) { %>
+                    <span class="badge bg-warning text-dark"><%= team.hallucinationCount %></span>
+                <% } else { %>
+                    <span class="text-muted"><%= team.hallucinationCount || 0 %></span>
+                <% } %>
+            </td>
+            <td>
+                <% if (team.status === 'active') { %>
+                    <span class="badge bg-success">Active</span>
+                <% } else if (team.status === 'locked') { %>
+                    <span class="badge bg-warning text-dark">Locked</span>
+                <% } else { %>
+                    <span class="badge bg-danger">DQ</span>
+                <% } %>
+            </td>
+        </tr>
+        <% }) %>
+        <% if (teams.length === 0) { %>
+        <tr><td colspan="9" class="text-center text-muted py-4">No ranked teams yet. Click Recalculate to generate rankings.</td></tr>
+        <% } %>
+        </tbody>
+    </table>
+</div>

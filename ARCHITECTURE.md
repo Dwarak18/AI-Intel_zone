@@ -398,8 +398,8 @@ This file should be treated as the source-of-truth architecture summary for exte
                     │                 │                 │
            ┌────────▼──────┐ ┌───────▼───────┐ ┌──────▼───────┐
            │  PostgreSQL   │ │    Redis      │ │  InfluxDB    │
-           │  Primary DB   │ │  Cache +      │ │  Time Series │
-           │               │ │  Sessions +   │ │  Metrics     │
+           │  Primary DB   │ │  Cache +      │ │  (PLANNED)   │
+           │               │ │  Sessions +   │ │  Time Series │
            │ • Teams       │ │  Pub/Sub      │ │              │
            │ • Users       │ │               │ │ • Latency    │
            │ • Missions    │ │ • Leaderboard │ │ • Throughput │
@@ -429,7 +429,7 @@ This file should be treated as the source-of-truth architecture summary for exte
     └──────────────────────────────────────────────────┘
 
     ┌──────────────────────────────────────────────────┐
-    │            OBSERVABILITY STACK                    │
+    │        OBSERVABILITY STACK (PLANNED — not in compose) │
     │                                                   │
     │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
     │  │Prometheus│  │ Grafana  │  │ Sentry   │       │
@@ -506,15 +506,15 @@ TEAM SUBMITS PROMPT
 | **Backend API** | Flask + Flask-SocketIO | Lightweight, extensible, real-time capable |
 | **Database** | PostgreSQL 16 | ACID compliance, JSON support, robust |
 | **Cache** | Redis 7 | Leaderboard, sessions, rate limiting, pub/sub |
-| **Time-Series** | InfluxDB | Activity metrics, anomaly detection |
+| **Time-Series** | InfluxDB | Activity metrics, anomaly detection — **planned, not deployed** |
 | **Task Queue** | Celery + Redis | Async scoring, batch exports, alerts |
 | **Admin Frontend** | HTML/CSS/JS (Jinja2) | Server-rendered, fast, no build step needed |
 | **Real-Time** | Socket.IO | Bi-directional, fallback to polling |
 | **Auth** | JWT + Flask-Login | Stateless API auth + session admin |
 | **Validation** | jsonschema + custom | Schema enforcement, regex, type checking |
 | **Security** | Custom middleware | Injection detection, RBAC, audit trail |
-| **Monitoring** | Prometheus + Grafana | Metrics, dashboards, alerting |
-| **Error Tracking** | Sentry | Production error capture |
+| **Monitoring** | Prometheus + Grafana | Metrics, dashboards, alerting — **planned, not in current docker-compose** |
+| **Error Tracking** | Sentry | Production error capture — **planned, not in current docker-compose** |
 | **Containerization** | Docker + Compose | Reproducible deployment |
 | **Reverse Proxy** | Nginx | SSL termination, rate limiting |
 | **Backup** | pg_dump + S3/MinIO | Scheduled backups, log archival |
@@ -619,7 +619,7 @@ Validation_Rate = (Successful_Validations / Total_Submissions) × 100
 | Speed Demon | +30 | Complete in under 25% of time limit |
 | Consistency | +20 | 5 consecutive valid submissions |
 | Zero Error | +40 | Complete all missions with 0 errors |
-| Innovation | +15 | Creative prompt engineering (admin judged) |
+| Efficient Prompt | +15 | Prompt ≤ 200 chars **and** confidence ≥ 0.95 (auto-awarded) |
 
 ### 5.6 Tie-Break Logic
 
@@ -678,20 +678,45 @@ Pre-competition practice environment where teams can test prompts without affect
 
 ### 7.1 Docker Compose Stack
 
+> **Actual services in `docker-compose.yml`** — do not add observability services (InfluxDB, Prometheus, Grafana)
+> until they are explicitly provisioned.
+
 ```
 services:
-  nginx          → Reverse proxy + SSL
-  flask-api      → 3 replicas behind load balancer
-  celery-worker  → 2 workers for async tasks
-  celery-beat    → Scheduled tasks (backups, cleanup)
-  postgres       → Primary database
-  redis          → Cache + message broker
-  influxdb       → Time-series metrics
-  grafana        → Monitoring dashboards
-  prometheus     → Metrics collection
+  nginx          → Reverse proxy + SSL termination
+  app            → Flask application (Gunicorn in prod)
+  celery-worker  → Async task worker
+  celery-beat    → Scheduled tasks (cleanup, rankings, health)
+  postgres       → Primary database (SQLAlchemy models)
+  redis          → Celery broker + rate-limit / session store
 ```
 
-### 7.2 Pre-Competition Checklist
+**Horizontal scaling note:** To run multiple app replicas set
+`replicas: N` on the `app` service and point a HAProxy/Nginx upstream
+at each container. Celery workers scale independently — add workers
+by duplicating the `celery-worker` service definition with a new name.
+No code changes are required; workers autodiscover tasks via Redis.
+
+**Observability (planned, not yet deployed):**
+```
+  influxdb       → Time-series activity metrics    (add when ready)
+  prometheus     → Scrape /metrics from Flask app  (add when ready)
+  grafana        → Dashboards backed by Prometheus  (add when ready)
+  sentry-sdk     → Error tracking (pip install, set SENTRY_DSN env)  (add when ready)
+```
+
+### 7.2 Known Tech Debt
+
+| Item | Priority | Notes |
+|---|---|---|
+| `User.query.get()` calls | Low | SQLAlchemy 2.0 legacy; replace with `db.session.get(User, id)` |
+| `Team.query.get()` / `Mission.query.get()` | Low | Same as above |
+| JWT_SECRET_KEY min 32 bytes | Medium | Enforce in `config.py` with `assert len(...) >= 32` |
+| No `/` root route | Low | Redirect to `/auth/login` or `/auth/team-login` |
+| No integration test for team web session login | Medium | Add to `tests/test_smoke.py` |
+| Socket.IO in requirements but not wired | Low | Remove or implement for live leaderboard |
+
+### 7.3 Pre-Competition Checklist
 
 - [ ] Load test with 150+ simulated teams
 - [ ] Verify all rate limits under stress

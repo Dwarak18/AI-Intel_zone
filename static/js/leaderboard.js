@@ -41,17 +41,14 @@
         `;
     }
 
-    function refreshLeaderboard() {
+    async function refreshLeaderboard() {
         const sortBy = sortSelect?.value || 'score';
-        fetch(`/api/leaderboard?sort_by=${encodeURIComponent(sortBy)}&limit=100`)
-            .then(r => r.json())
-            .then(data => {
-                const rows = (data.leaderboard || []).map((t, i) => rowTemplate(t, i)).join('');
-                table.innerHTML = rows || '<tr><td colspan="10" class="text-center text-muted py-4">No ranked teams yet</td></tr>';
-                ArenaUI.initTeamDots();
-                ArenaUI.initBars();
-            })
-            .catch(() => null);
+        const data = await ArenaUI.safeFetch(`/api/leaderboard?sort_by=${encodeURIComponent(sortBy)}&limit=100`);
+        if (!data) return;
+        const rows = (data.leaderboard || []).map((t, i) => rowTemplate(t, i)).join('');
+        table.innerHTML = rows || '<tr><td colspan="10" class="text-center text-muted py-4">No ranked teams yet</td></tr>';
+        ArenaUI.initTeamDots();
+        ArenaUI.initBars();
     }
 
     if (sortSelect) {

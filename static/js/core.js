@@ -82,6 +82,34 @@ window.ArenaUI = (() => {
         return setInterval(fn, ms);
     }
 
+    async function safeFetch(url, options = {}) {
+        const timeout = options.timeout || 10000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        try {
+            const resp = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timer);
+            if (!resp.ok) {
+                console.error(`[safeFetch] ${url} returned ${resp.status}`);
+                return null;
+            }
+            const ct = resp.headers.get('content-type') || '';
+            if (!ct.includes('application/json')) {
+                console.error(`[safeFetch] ${url} returned non-JSON: ${ct}`);
+                return null;
+            }
+            return await resp.json();
+        } catch (err) {
+            clearTimeout(timer);
+            if (err.name === 'AbortError') {
+                console.error(`[safeFetch] ${url} timed out after ${timeout}ms`);
+            } else {
+                console.error(`[safeFetch] ${url} failed:`, err.message);
+            }
+            return null;
+        }
+    }
+
     return {
         updateClock,
         debounce,
@@ -93,6 +121,7 @@ window.ArenaUI = (() => {
         initTeamDots,
         initBars,
         startPolling,
+        safeFetch,
     };
 })();
 
