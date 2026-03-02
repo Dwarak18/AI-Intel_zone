@@ -63,8 +63,8 @@ const config = {
   corsOrigins: process.env.CORS_ORIGINS || '*',
 
   // Static CDN — set to your Vercel deployment URL in production
-  // e.g. https://ai-zone-static.vercel.app
-  staticCdnUrl: (process.env.STATIC_CDN_URL || '').replace(/\/$/, ''),
+  // Accepts STATIC_CDN_URL (original) or NEXT_PUBLIC_API_URL (Railway alias)
+  staticCdnUrl: (process.env.STATIC_CDN_URL || process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, ''),
 };
 
 module.exports = config;
