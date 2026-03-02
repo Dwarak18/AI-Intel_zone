@@ -447,7 +447,10 @@ async function seed() {
     await admin.save();
     console.log(`✓ Admin user created: ${ADMIN_USERNAME}`);
   } else {
-    console.log(`  Admin user already exists: ${ADMIN_USERNAME}`);
+    // Always sync password so env/config changes take effect
+    await admin.setPassword(ADMIN_PASSWORD);
+    await admin.save();
+    console.log(`✓ Admin password updated: ${ADMIN_USERNAME}`);
   }
 
   // Moderator
