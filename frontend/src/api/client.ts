@@ -73,6 +73,14 @@ export const adminApi = {
   audit: (params?: Record<string, any>) => api.get('/admin/api/audit', { params }),
   leaderboard: () => api.get('/admin/api/leaderboard'),
   recalculate: () => api.post('/admin/api/leaderboard/recalculate'),
+  // Timer
+  timerState: () => api.get('/admin/api/timer'),
+  timerStart: (totalSeconds: number) => api.post('/admin/api/timer/start', { totalSeconds }),
+  timerPause: () => api.post('/admin/api/timer/pause'),
+  timerResume: () => api.post('/admin/api/timer/resume'),
+  timerReset: () => api.post('/admin/api/timer/reset'),
+  timerAdjust: (delta: number) => api.post('/admin/api/timer/adjust', { delta }),
+  timerSetDuration: (totalSeconds: number) => api.post('/admin/api/timer/duration', { totalSeconds }),
 };
 
 // ── Team API ──────────────────────────────────────────────

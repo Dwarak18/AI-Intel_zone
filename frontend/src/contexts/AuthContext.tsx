@@ -35,7 +35,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     authApi.me()
-      .then(r => { setUser(r.data.user); setTeam(r.data.team ?? null); })
+      .then(r => {
+        const u = r.data.user;
+        // Ensure isAdmin is always a real boolean (backend role-based fallback)
+        if (u && u.isAdmin === undefined) {
+          u.isAdmin = ['super_admin', 'admin', 'moderator'].includes(u.role);
+        }
+        setUser(u);
+        setTeam(r.data.team ?? null);
+      })
       .catch(() => { setUser(null); setTeam(null); })
       .finally(() => setLoading(false));
   }, []);
@@ -43,14 +51,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginAdmin = async (username: string, password: string) => {
     const { data } = await authApi.loginAdmin(username, password);
     setToken(data.token);
-    setUser(data.user);
+    const u = data.user;
+    if (u && u.isAdmin === undefined) u.isAdmin = ['super_admin', 'admin', 'moderator'].includes(u.role);
+    setUser(u);
     setTeam(null);
   };
 
   const loginTeam = async (team_code: string, password: string) => {
     const { data } = await authApi.loginTeam(team_code, password);
     setToken(data.token);
-    setUser(data.user);
+    const u = data.user;
+    if (u && u.isAdmin === undefined) u.isAdmin = ['super_admin', 'admin', 'moderator'].includes(u.role);
+    setUser(u);
     setTeam(data.team ?? null);
   };
 

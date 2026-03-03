@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import TeamLayout from '../../components/TeamLayout';
 import { teamApi } from '../../api/client';
@@ -18,6 +19,12 @@ interface HistoryEntry { id: number; validationStatus: string; scoreAwarded: num
 
 export default function ConsolePage() {
   const { user, team } = useAuth();
+  const nav = useNavigate();
+
+  // Admins should never land here — send them to their dashboard
+  useEffect(() => {
+    if (user?.isAdmin) nav('/admin/dashboard', { replace: true });
+  }, [user, nav]);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [selected, setSelected] = useState<Mission | null>(null);
   const [prompt, setPrompt] = useState('');
@@ -52,8 +59,7 @@ export default function ConsolePage() {
   };
 
   const handleSubmit = async () => {
-    if (!selected || !prompt.trim()) return;
-    if (selected.outputFormatHint?.includes('json') && !validateJson(response)) return;
+    if (!selected || !prompt.trim() || !response.trim()) return;
     setSubmitting(true); setResult(null);
     try {
       const r = await teamApi.submit({

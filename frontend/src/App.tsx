@@ -10,6 +10,7 @@ import LogsPage from './pages/admin/LogsPage';
 import SecurityPage from './pages/admin/SecurityPage';
 import AuditPage from './pages/admin/AuditPage';
 import ConsolePage from './pages/team/ConsolePage';
+import TimerPage from './pages/admin/TimerPage';
 
 function AdminGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/admin/logs" element={<AdminGuard><LogsPage /></AdminGuard>} />
           <Route path="/admin/security" element={<AdminGuard><SecurityPage /></AdminGuard>} />
           <Route path="/admin/audit" element={<AdminGuard><AuditPage /></AdminGuard>} />
+          <Route path="/admin/timer" element={<AdminGuard><TimerPage /></AdminGuard>} />
           <Route path="/team/console" element={<TeamGuard><ConsolePage /></TeamGuard>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

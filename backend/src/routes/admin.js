@@ -11,6 +11,7 @@ const { sequelize, User, Team, TeamMember, Mission, Submission,
 const { requireAdmin, AuditLogger } = require('../security');
 const { requireLogin, jwtRequired } = require('../authMiddleware');
 const ScoringEngine = require('../scoringEngine');
+const TimerEngine = require('../timerEngine');
 
 // Optional dependencies — fail gracefully if not installed
 let multer = null;
@@ -21,6 +22,22 @@ try { ExcelJS = require('exceljs'); } catch (_) {}
 const auth = [requireLogin, requireAdmin];
 // API auth: accepts JWT Bearer token OR existing session — for React frontend
 const apiAuth = [jwtRequired, requireAdmin];
+
+// ==============================================================================
+// SPA PASSTHROUGH
+// When the React build is present (/app/public/index.html), skip all non-API
+// routes so the SPA catch-all in app.js can serve index.html.
+// This prevents EJS routes like /admin/teams from intercepting React nav links.
+// ==============================================================================
+const _spaIndex = require('path').join(__dirname, '../../public/index.html');
+router.use((req, res, next) => {
+  // Always let /api/* through (JSON endpoints used by the React app)
+  if (req.path.startsWith('/api')) return next();
+  // If React build exists, hand off non-API paths to the SPA catch-all
+  if (require('fs').existsSync(_spaIndex)) return next('router');
+  // No React build (dev/legacy mode) — fall through to EJS routes
+  return next();
+});
 
 // ==============================================================================
 // DASHBOARD
@@ -801,7 +818,7 @@ router.get('/api/teams', ...apiAuth, async (req, res) => {
   try {
     const { status: statusFilter = 'all', search = '' } = req.query;
     const where = {};
-    if (statusFilter !== 'all') where.status = statusFilter;
+    if (statusFilter && statusFilter !== 'all') where.status = statusFilter;
     if (search) {
       where[Op.or] = [
         { name: { [Op.like]: `%${search}%` } },
@@ -1007,7 +1024,7 @@ router.get('/api/logs', ...apiAuth, async (req, res) => {
       const valMap = { valid: 'pass', invalid: 'fail', error: 'fail' };
       where.validationResult = valMap[status] || status;
     }
-    if (flagged === '1') where.injectionScore = { [Op.gt]: 0.5 };
+    if (flagged === '1') where[Op.or] = [{ rejected: true }, { injectionScore: { [Op.gt]: 0.5 } }];
     if (date_from) { try { where.createdAt = { ...(where.createdAt || {}), [Op.gte]: new Date(date_from) }; } catch(e) {} }
     if (date_to) {
       const endDt = new Date(date_to); endDt.setHours(23, 59, 59, 999);
@@ -1413,6 +1430,58 @@ router.post('/api/import-teams', ...apiAuth, async (req, res) => {
     console.error('import-teams error:', importErr);
     return res.status(500).json({ error: 'Import failed: ' + importErr.message });
   }
+});
+
+// ==============================================================================
+// GAME TIMER ENDPOINTS  (apiAuth — JWT admin only)
+// ==============================================================================
+
+// GET /admin/api/timer — current timer state
+router.get('/api/timer', ...apiAuth, (req, res) => {
+  return res.json(TimerEngine.getState());
+});
+
+// POST /admin/api/timer/start   body: { totalSeconds: number }
+router.post('/api/timer/start', ...apiAuth, async (req, res) => {
+  const secs = parseInt(req.body.totalSeconds || 3600);
+  if (isNaN(secs) || secs < 1) return res.status(400).json({ error: 'totalSeconds must be a positive integer' });
+  const state = TimerEngine.start(secs);
+  await AuditLogger.log('timer_started', `Game timer started: ${secs}s`, { userId: req.user.id });
+  return res.json(state);
+});
+
+// POST /admin/api/timer/pause
+router.post('/api/timer/pause', ...apiAuth, async (req, res) => {
+  const state = TimerEngine.pause();
+  await AuditLogger.log('timer_paused', 'Game timer paused', { userId: req.user.id });
+  return res.json(state);
+});
+
+// POST /admin/api/timer/resume
+router.post('/api/timer/resume', ...apiAuth, async (req, res) => {
+  const state = TimerEngine.resume();
+  await AuditLogger.log('timer_resumed', 'Game timer resumed', { userId: req.user.id });
+  return res.json(state);
+});
+
+// POST /admin/api/timer/reset
+router.post('/api/timer/reset', ...apiAuth, async (req, res) => {
+  const state = TimerEngine.reset();
+  await AuditLogger.log('timer_reset', 'Game timer reset', { userId: req.user.id });
+  return res.json(state);
+});
+
+// POST /admin/api/timer/adjust  body: { delta: number }  (seconds, positive or negative)
+router.post('/api/timer/adjust', ...apiAuth, (req, res) => {
+  const delta = parseInt(req.body.delta || 0);
+  return res.json(TimerEngine.adjust(delta));
+});
+
+// POST /admin/api/timer/duration  body: { totalSeconds: number }  (change duration mid-game)
+router.post('/api/timer/duration', ...apiAuth, (req, res) => {
+  const secs = parseInt(req.body.totalSeconds || 3600);
+  if (isNaN(secs) || secs < 1) return res.status(400).json({ error: 'totalSeconds must be a positive integer' });
+  return res.json(TimerEngine.setDuration(secs));
 });
 
 module.exports = router;

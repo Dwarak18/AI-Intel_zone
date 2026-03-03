@@ -94,6 +94,46 @@ router.post('/submit', jwtRequired, async (req, res) => {
     });
   }
 
+  // Guard: prevent re-scoring a mission the team already solved
+  const alreadySolved = await Submission.findOne({
+    where: { teamId, missionId, validationStatus: 'valid' },
+    attributes: ['id', 'createdAt', 'totalScore'],
+  });
+  if (alreadySolved) {
+    return res.status(409).json({
+      status: 'already_solved',
+      error: 'Your team has already successfully completed this mission. No additional score awarded.',
+      solvedAt: alreadySolved.createdAt,
+      scoreAwarded: alreadySolved.totalScore,
+      attemptsUsed: attemptCount,
+      attemptsRemaining: maxRetries - attemptCount,
+    });
+  }
+
+  // Guard: rapid-failure cooldown — max 5 failed attempts per 60 s per mission
+  const recentFailures = await Submission.count({
+    where: {
+      teamId,
+      missionId,
+      validationStatus: { [Op.ne]: 'valid' },
+      createdAt: { [Op.gte]: new Date(Date.now() - 60_000) },
+    },
+  });
+  if (recentFailures >= 5) {
+    await AuditLogger.logSecurityEvent(
+      'brute_force_detected',
+      `Rapid submission cooling for team ${team.teamCode} on mission ${mission.missionCode} (${recentFailures} failures/min)`,
+      { severity: 'medium', teamId, userId: req.user?.id, ipAddress: req.ip }
+    );
+    return res.status(429).json({
+      status: 'cooldown',
+      error: 'Too many rapid failed attempts. Please wait 30 seconds before retrying.',
+      cooldownSeconds: 30,
+      attemptsUsed: attemptCount,
+      attemptsRemaining: maxRetries - attemptCount,
+    });
+  }
+
   // Injection Detection
   const injectionResult = InjectionDetector.analyze(promptText);
   const isInjection = injectionResult.isSuspicious;
@@ -170,10 +210,10 @@ router.post('/submit', jwtRequired, async (req, res) => {
     responseTimeMs: data.response_time_ms || null,
   });
 
-  // Calculate Score
-  let scoreResult = { finalScore: 0 };
+  // Calculate Score  (calculateMissionScore is async — must await)
+  let scoreResult = { finalScore: 0, accuracyScore: 0, speedScore: 0, validationScore: 0 };
   if (validation.overallStatus === 'valid') {
-    scoreResult = ScoringEngine.calculateMissionScore(submission, mission, team);
+    scoreResult = await ScoringEngine.calculateMissionScore(submission, mission, team);
     submission.accuracyScore = scoreResult.accuracyScore;
     submission.speedScore = scoreResult.speedScore;
     submission.validationScore = scoreResult.validationScore;
@@ -200,32 +240,41 @@ router.post('/submit', jwtRequired, async (req, res) => {
   team.healthScore = ScoringEngine.calculateHealthScore(team);
   mission.totalAttempts += 1;
 
-  // Persist
-  await submission.save();
+  // Persist — atomic transaction: submission + aiLog + team counters + mission counters
+  const t = await sequelize.transaction();
+  let aiLog;
+  try {
+    await submission.save({ transaction: t });
 
-  // Create AI Log
-  const aiLog = await AILog.create({
-    teamId,
-    submissionId: submission.id,
-    userId: req.user?.id || null,
-    promptText,
-    aiRawOutput: aiResponse,
-    aiParsedOutput: validation.parsedData ? JSON.stringify(validation.parsedData) : null,
-    parseResult: validation.jsonValid ? 'success' : 'failed',
-    validationResult: validation.isValid ? 'pass' : 'fail',
-    errorDetails: validation.errors.length ? JSON.stringify(validation.errors) : null,
-    rejected: isInjection && injectionResult.injectionScore > 0.9,
-    retryAttempt: attemptCount,
-    confidenceScore: validation.confidenceScore,
-    hallucinationProbability: hallucinationProb,
-    injectionScore: injectionResult.injectionScore,
-    suspiciousPatterns: injectionResult.patternsFound.length ? JSON.stringify(injectionResult.patternsFound) : null,
-    ipAddress: req.ip,
-    responseLatencyMs: data.response_time_ms || null,
-  });
+    aiLog = await AILog.create({
+      teamId,
+      submissionId: submission.id,
+      userId: req.user?.id || null,
+      promptText,
+      aiRawOutput: aiResponse,
+      aiParsedOutput: validation.parsedData ? JSON.stringify(validation.parsedData) : null,
+      parseResult: validation.jsonValid ? 'success' : 'failed',
+      validationResult: validation.isValid ? 'pass' : 'fail',
+      errorDetails: validation.errors.length ? JSON.stringify(validation.errors) : null,
+      rejected: isInjection && injectionResult.injectionScore > 0.9,
+      retryAttempt: attemptCount,
+      confidenceScore: validation.confidenceScore,
+      hallucinationProbability: hallucinationProb,
+      injectionScore: injectionResult.injectionScore,
+      suspiciousPatterns: injectionResult.patternsFound.length ? JSON.stringify(injectionResult.patternsFound) : null,
+      ipAddress: req.ip,
+      responseLatencyMs: data.response_time_ms || null,
+    }, { transaction: t });
 
-  await team.save();
-  await mission.save();
+    await team.save({ transaction: t });
+    await mission.save({ transaction: t });
+
+    await t.commit();
+  } catch (dbErr) {
+    await t.rollback();
+    console.error('Submission persist failed, rolled back:', dbErr);
+    return res.status(500).json({ error: 'Failed to save submission. Please retry.' });
+  }
 
   // Check & Award Bonuses
   let bonusAwarded = 0;

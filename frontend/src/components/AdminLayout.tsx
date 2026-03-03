@@ -4,6 +4,7 @@ import { ReactNode } from 'react';
 
 const navItems = [
   { to: '/admin/dashboard', icon: 'bi-speedometer2', label: 'Dashboard' },
+  { to: '/admin/timer', icon: 'bi-stopwatch-fill', label: 'Game Timer' },
   { to: '/admin/teams', icon: 'bi-people-fill', label: 'Teams' },
   { to: '/admin/missions', icon: 'bi-trophy-fill', label: 'Missions' },
   { to: '/admin/leaderboard', icon: 'bi-bar-chart-fill', label: 'Leaderboard' },

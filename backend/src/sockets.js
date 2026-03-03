@@ -6,6 +6,7 @@
 const jwt = require('jsonwebtoken');
 const config = require('./config');
 const { User, TeamMember } = require('./models');
+const TimerEngine = require('./timerEngine');
 
 let ioInstance = null;
 
@@ -33,6 +34,8 @@ async function verifySocketToken(socket, next) {
 
 function initSockets(io) {
   ioInstance = io;
+  // Wire timer engine so it can broadcast via both namespaces
+  TimerEngine.setIO(io);
 
   // ==============================================================================
   // ADMIN NAMESPACE — /admin

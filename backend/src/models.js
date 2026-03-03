@@ -69,6 +69,7 @@ class User extends Model {
       username: this.username,
       email: this.email,
       role: this.role,
+      isAdmin: this.isAdmin,
       isActive: this.isActive,
       lastLogin: this.lastLogin ? this.lastLogin.toISOString() : null,
       loginCount: this.loginCount,

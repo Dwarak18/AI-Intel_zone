@@ -33,8 +33,9 @@ export default function DashboardPage() {
   }, []);
 
   if (loading) return <AdminLayout><div className="arena-loader">Loading…</div></AdminLayout>;
+  if (!stats) return <AdminLayout><div className="arena-loader text-danger">Failed to load dashboard stats. Please refresh.</div></AdminLayout>;
 
-  const s = stats!;
+  const s = stats;
   const cards = [
     { label: 'Total Teams', value: s.totalTeams, sub: `${s.activeTeams} active`, icon: 'bi-people-fill', color: '#6366f1' },
     { label: 'Submissions', value: s.totalSubmissions, sub: `${s.totalSuccessful} successful`, icon: 'bi-send-fill', color: '#3b82f6' },

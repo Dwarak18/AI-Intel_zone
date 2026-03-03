@@ -422,18 +422,7 @@ const MISSIONS = [
   },
 ];
 
-const TEAMS = [
-  { teamCode: 'ALPHA', name: 'Team Alpha', institution: 'MIT', members: [{ username: 'alpha_lead', email: 'alpha_lead@team.io' }, { username: 'alpha_member', email: 'alpha_member@team.io' }] },
-  { teamCode: 'BETA', name: 'Team Beta', institution: 'Stanford', members: [{ username: 'beta_lead', email: 'beta_lead@team.io' }] },
-  { teamCode: 'GAMMA', name: 'Team Gamma', institution: 'Carnegie Mellon', members: [{ username: 'gamma_lead', email: 'gamma_lead@team.io' }] },
-  { teamCode: 'DELTA', name: 'Team Delta', institution: 'Caltech', members: [{ username: 'delta_lead', email: 'delta_lead@team.io' }] },
-  { teamCode: 'EPSILON', name: 'Team Epsilon', institution: 'UC Berkeley', members: [{ username: 'epsilon_lead', email: 'epsilon_lead@team.io' }] },
-  { teamCode: 'ZETA', name: 'Team Zeta', institution: 'Harvard', members: [{ username: 'zeta_lead', email: 'zeta_lead@team.io' }] },
-  { teamCode: 'ETA', name: 'Team Eta', institution: 'Princeton', members: [{ username: 'eta_lead', email: 'eta_lead@team.io' }] },
-  { teamCode: 'THETA', name: 'Team Theta', institution: 'Yale', members: [{ username: 'theta_lead', email: 'theta_lead@team.io' }] },
-  { teamCode: 'IOTA', name: 'Team Iota', institution: 'Columbia', members: [{ username: 'iota_lead', email: 'iota_lead@team.io' }] },
-  { teamCode: 'KAPPA', name: 'Team Kappa', institution: 'Cornell', members: [{ username: 'kappa_lead', email: 'kappa_lead@team.io' }] },
-];
+const TEAMS = [];
 
 async function seed() {
   console.log('Syncing database...');

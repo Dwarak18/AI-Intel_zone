@@ -124,17 +124,11 @@ async function seedTeams() {
         const username = toUsername(memberName, td.id, i);
         const email    = `${username}@aiz.local`;
 
-        const [user, userCreated] = await User.findOrCreate({
-          where: { username },
-          defaults: {
-            email,
-            role: 'team_member',
-            isActive: true,
-          },
-        });
-
+        // findOrCreate can't call setPassword (async) before INSERT, so do it manually
+        let user = await User.findOne({ where: { username } });
+        const userCreated = !user;
         if (userCreated) {
-          // Set password via the model's setPassword method
+          user = User.build({ username, email, role: 'team_member', isActive: true });
           await user.setPassword(td.pass);
           await user.save();
           usersCreated++;
